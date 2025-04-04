@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import glob
 import rasterio
 import matplotlib.pyplot as plt
 
@@ -123,7 +124,12 @@ def run_deepforest(rgb_tile, save_path, patch_size=400, patch_overlap=0.25):
     predicted_raster.to_csv(filename)
     print(f"Predicted boxes for {rgb_tile} saved to {filename}")
     return filename
+
 if __name__ == "__main__":
+    
+    rgb_tiles_dir = '/blue/azare/riteshchowdhry/Macrosystems/Data_files/unlabeled_data/HARV/RGB/Mosaic/'
+    all_rgb_tiles = glob.glob(os.path.join(rgb_tiles_dir, '*.tif'))
+    
     # given a bbox (from deepforest) in RGB coordinates 
     rgb_file = '/blue/azare/riteshchowdhry/Macrosystems/Data_files/unlabeled_data/HARV/RGB/Mosaic/2022_HARV_7_734000_4709000_image.tif'
     hsi_file = '/blue/azare/riteshchowdhry/Macrosystems/Data_files/unlabeled_data/HARV/HSI/HSI_tif/2022_HARV_7_734000_4709000_image_hyperspectral.tif'
