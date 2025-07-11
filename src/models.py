@@ -1,3 +1,19 @@
+# ⚠️  DEPRECATED: This file has been moved to the main package
+# Please use: from neon_tree_classification.models.architectures import HsiPixelClassifier
+
+print("⚠️  This script is deprecated!")
+print("Please use the models from the main package instead:")
+print("  from neon_tree_classification.models.architectures import HsiPixelClassifier")
+
+"""
+PyTorch models for NEON tree classification.
+
+This module contains neural network architectures for processing
+hyperspectral imagery and tree crown classification.
+
+Author: Ritesh Chowdhry
+"""
+
 import torch
 from torch import nn
 
