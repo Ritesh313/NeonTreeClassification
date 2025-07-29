@@ -1,380 +1,452 @@
 """
 PyTorch Lightning modules for training tree classification models.
+
+Provides base class with common training logic and modality-specific extensions.
 """
 
 import torch
 import torch.nn.functional as F
-import pytorch_lightning as pl
-from torch.optim import Adam, SGD
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
-from typing import Dict, Any, Optional, Tuple
+import lightning as L
+from torch.optim import Adam, SGD, AdamW
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR, StepLR
+from typing import Dict, Any, Optional, Union
 import torchmetrics
-from .architectures import HsiPixelClassifier, MultiModalClassifier, CNNClassifier
+
+from .rgb_models import create_rgb_model
+from .hsi_models import create_hsi_model
+from .lidar_models import create_lidar_model
 
 
-class HsiClassificationModule(pl.LightningModule):
+class BaseTreeClassifier(L.LightningModule):
     """
-    Lightning module for hyperspectral image classification.
+    Base Lightning module for tree species classification.
+
+    Provides common training logic that works with our clean data format:
+    batch = {"modality": tensor, "species_idx": tensor}
     """
-    
-    def __init__(self,
-                 input_dim: int,
-                 num_classes: int,
-                 encoding_dim: int = 32,
-                 learning_rate: float = 1e-3,
-                 reconstruction_weight: float = 1.0,
-                 classification_weight: float = 1.0,
-                 optimizer: str = 'adam',
-                 scheduler: str = 'plateau'):
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        num_classes: int,
+        learning_rate: float = 1e-3,
+        optimizer: str = "adamw",
+        scheduler: str = "plateau",
+        weight_decay: float = 1e-4,
+        class_weights: Optional[torch.Tensor] = None,
+    ):
         """
-        Initialize HSI classification module.
-        
+        Initialize base classifier.
+
         Args:
-            input_dim: Number of hyperspectral bands
+            model: PyTorch model (from rgb_models.py, hsi_models.py, etc.)
             num_classes: Number of tree species classes
-            encoding_dim: Dimension of encoded representation
-            learning_rate: Learning rate for optimization
-            reconstruction_weight: Weight for reconstruction loss
-            classification_weight: Weight for classification loss
-            optimizer: Optimizer type ('adam' or 'sgd')
-            scheduler: Scheduler type ('plateau' or 'cosine')
+            learning_rate: Learning rate for optimizer
+            optimizer: Optimizer type ('adam', 'adamw', 'sgd')
+            scheduler: Scheduler type ('plateau', 'cosine', 'step')
+            weight_decay: Weight decay for optimizer
+            class_weights: Optional class weights for imbalanced datasets
         """
         super().__init__()
-        self.save_hyperparameters()
-        
-        self.model = HsiPixelClassifier(input_dim, num_classes, encoding_dim)
-        
-        # Metrics
-        self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
+        self.save_hyperparameters(ignore=["model", "class_weights"])
+
+        self.model = model
+        self.num_classes = num_classes
+        self.class_weights = class_weights
+
+        # Common metrics for all modalities
+        self.train_acc = torchmetrics.Accuracy(
+            task="multiclass", num_classes=num_classes
+        )
         self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        
-        self.train_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-        self.val_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-        self.test_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-    
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        self.test_acc = torchmetrics.Accuracy(
+            task="multiclass", num_classes=num_classes
+        )
+
+        self.train_f1 = torchmetrics.F1Score(
+            task="multiclass", num_classes=num_classes, average="macro"
+        )
+        self.val_f1 = torchmetrics.F1Score(
+            task="multiclass", num_classes=num_classes, average="macro"
+        )
+        self.test_f1 = torchmetrics.F1Score(
+            task="multiclass", num_classes=num_classes, average="macro"
+        )
+
+        # Confusion matrix for validation
+        self.val_confmat = torchmetrics.ConfusionMatrix(
+            task="multiclass", num_classes=num_classes
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
         return self.model(x)
-    
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+
+    def _shared_step(self, batch: Dict[str, torch.Tensor], stage: str):
+        """Shared step logic for train/val/test."""
+        # Extract labels
+        targets = batch["species_idx"]
+
+        # Get modality data (to be implemented by subclasses)
+        inputs = self._extract_modality_data(batch)
+
+        # Forward pass
+        logits = self.forward(inputs)
+
+        # Compute loss
+        if self.class_weights is not None:
+            loss = F.cross_entropy(
+                logits, targets, weight=self.class_weights.to(self.device)
+            )
+        else:
+            loss = F.cross_entropy(logits, targets)
+
+        # Get predictions
+        preds = torch.argmax(logits, dim=1)
+
+        return loss, preds, targets, logits
+
+    def training_step(
+        self, batch: Dict[str, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         """Training step."""
-        x, y = batch
-        reconstructed, predictions = self.forward(x)
-        
-        # Calculate losses
-        reconstruction_loss = F.mse_loss(reconstructed, x)
-        classification_loss = F.cross_entropy(predictions, y)
-        
-        # Combined loss
-        total_loss = (self.hparams.reconstruction_weight * reconstruction_loss + 
-                     self.hparams.classification_weight * classification_loss)
-        
+        loss, preds, targets, logits = self._shared_step(batch, "train")
+
         # Update metrics
-        self.train_acc(predictions, y)
-        self.train_f1(predictions, y)
-        
+        self.train_acc(preds, targets)
+        self.train_f1(preds, targets)
+
         # Log metrics
-        self.log('train/loss', total_loss, on_step=True, on_epoch=True)
-        self.log('train/reconstruction_loss', reconstruction_loss, on_epoch=True)
-        self.log('train/classification_loss', classification_loss, on_epoch=True)
-        self.log('train/accuracy', self.train_acc, on_epoch=True)
-        self.log('train/f1', self.train_f1, on_epoch=True)
-        
-        return total_loss
-    
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/accuracy", self.train_acc, on_epoch=True, prog_bar=True)
+        self.log("train/f1", self.train_f1, on_epoch=True)
+
+        return loss
+
+    def validation_step(
+        self, batch: Dict[str, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         """Validation step."""
-        x, y = batch
-        reconstructed, predictions = self.forward(x)
-        
-        # Calculate losses
-        reconstruction_loss = F.mse_loss(reconstructed, x)
-        classification_loss = F.cross_entropy(predictions, y)
-        total_loss = (self.hparams.reconstruction_weight * reconstruction_loss + 
-                     self.hparams.classification_weight * classification_loss)
-        
+        loss, preds, targets, logits = self._shared_step(batch, "val")
+
         # Update metrics
-        self.val_acc(predictions, y)
-        self.val_f1(predictions, y)
-        
+        self.val_acc(preds, targets)
+        self.val_f1(preds, targets)
+        self.val_confmat(preds, targets)
+
         # Log metrics
-        self.log('val/loss', total_loss, on_epoch=True)
-        self.log('val/reconstruction_loss', reconstruction_loss, on_epoch=True)
-        self.log('val/classification_loss', classification_loss, on_epoch=True)
-        self.log('val/accuracy', self.val_acc, on_epoch=True)
-        self.log('val/f1', self.val_f1, on_epoch=True)
-        
-        return total_loss
-    
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        self.log("val/loss", loss, on_epoch=True, prog_bar=True)
+        self.log("val/accuracy", self.val_acc, on_epoch=True, prog_bar=True)
+        self.log("val/f1", self.val_f1, on_epoch=True)
+
+        return loss
+
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Test step."""
-        x, y = batch
-        reconstructed, predictions = self.forward(x)
-        
-        # Calculate losses
-        reconstruction_loss = F.mse_loss(reconstructed, x)
-        classification_loss = F.cross_entropy(predictions, y)
-        total_loss = (self.hparams.reconstruction_weight * reconstruction_loss + 
-                     self.hparams.classification_weight * classification_loss)
-        
+        loss, preds, targets, logits = self._shared_step(batch, "test")
+
         # Update metrics
-        self.test_acc(predictions, y)
-        self.test_f1(predictions, y)
-        
+        self.test_acc(preds, targets)
+        self.test_f1(preds, targets)
+
         # Log metrics
-        self.log('test/loss', total_loss)
-        self.log('test/reconstruction_loss', reconstruction_loss)
-        self.log('test/classification_loss', classification_loss)
-        self.log('test/accuracy', self.test_acc)
-        self.log('test/f1', self.test_f1)
-        
-        return total_loss
-    
-    def configure_optimizers(self) -> Dict[str, Any]:
+        self.log("test/loss", loss, on_epoch=True)
+        self.log("test/accuracy", self.test_acc, on_epoch=True)
+        self.log("test/f1", self.test_f1, on_epoch=True)
+
+        return loss
+
+    def configure_optimizers(self):
         """Configure optimizers and schedulers."""
-        if self.hparams.optimizer == 'adam':
-            optimizer = Adam(self.parameters(), lr=self.hparams.learning_rate)
-        elif self.hparams.optimizer == 'sgd':
-            optimizer = SGD(self.parameters(), lr=self.hparams.learning_rate, momentum=0.9)
+        # Optimizer
+        if self.hparams.optimizer == "adam":
+            optimizer = Adam(
+                self.parameters(),
+                lr=self.hparams.learning_rate,
+                weight_decay=self.hparams.weight_decay,
+            )
+        elif self.hparams.optimizer == "adamw":
+            optimizer = AdamW(
+                self.parameters(),
+                lr=self.hparams.learning_rate,
+                weight_decay=self.hparams.weight_decay,
+            )
+        elif self.hparams.optimizer == "sgd":
+            optimizer = SGD(
+                self.parameters(),
+                lr=self.hparams.learning_rate,
+                weight_decay=self.hparams.weight_decay,
+                momentum=0.9,
+            )
         else:
             raise ValueError(f"Unknown optimizer: {self.hparams.optimizer}")
-        
-        if self.hparams.scheduler == 'plateau':
-            scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+
+        # Scheduler
+        if self.hparams.scheduler == "plateau":
+            scheduler = ReduceLROnPlateau(
+                optimizer, mode="min", factor=0.5, patience=5, verbose=True
+            )
             return {
-                'optimizer': optimizer,
-                'lr_scheduler': {
-                    'scheduler': scheduler,
-                    'monitor': 'val/loss',
-                    'frequency': 1
-                }
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "monitor": "val/loss",
+                    "frequency": 1,
+                },
             }
-        elif self.hparams.scheduler == 'cosine':
+        elif self.hparams.scheduler == "cosine":
             scheduler = CosineAnnealingLR(optimizer, T_max=100)
+            return [optimizer], [scheduler]
+        elif self.hparams.scheduler == "step":
+            scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
             return [optimizer], [scheduler]
         else:
             return optimizer
 
-
-class MultiModalClassificationModule(pl.LightningModule):
-    """
-    Lightning module for multi-modal tree classification.
-    """
-    
-    def __init__(self,
-                 hsi_dim: int,
-                 rgb_channels: int = 3,
-                 lidar_channels: int = 1,
-                 num_classes: int = 10,
-                 fusion_method: str = 'concatenate',
-                 learning_rate: float = 1e-3,
-                 optimizer: str = 'adam'):
+    def _extract_modality_data(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Initialize multi-modal classification module.
-        
+        Extract modality-specific data from batch.
+
+        To be implemented by subclasses.
+        """
+        raise NotImplementedError("Subclasses must implement _extract_modality_data")
+
+
+class RGBClassifier(BaseTreeClassifier):
+    """
+    Lightning module for RGB-based tree species classification.
+
+    Includes RGB-specific evaluation features like image logging.
+    """
+
+    def __init__(
+        self,
+        model_type: str = "simple",
+        num_classes: int = 10,
+        learning_rate: float = 1e-3,
+        optimizer: str = "adamw",
+        scheduler: str = "plateau",
+        weight_decay: float = 1e-4,
+        class_weights: Optional[torch.Tensor] = None,
+        log_images: bool = False,
+        **model_kwargs,
+    ):
+        """
+        Initialize RGB classifier.
+
         Args:
-            hsi_dim: Number of hyperspectral bands
-            rgb_channels: Number of RGB channels
-            lidar_channels: Number of LiDAR channels
+            model_type: Type of RGB model ("simple", "resnet")
             num_classes: Number of tree species classes
-            fusion_method: How to combine modalities
-            learning_rate: Learning rate for optimization
-            optimizer: Optimizer type
+            learning_rate: Learning rate for optimizer
+            optimizer: Optimizer type ('adam', 'adamw', 'sgd')
+            scheduler: Scheduler type ('plateau', 'cosine', 'step')
+            weight_decay: Weight decay for optimizer
+            class_weights: Optional class weights for imbalanced datasets
+            log_images: Whether to log sample images during validation
+            **model_kwargs: Additional arguments for model creation
         """
-        super().__init__()
-        self.save_hyperparameters()
-        
-        self.model = MultiModalClassifier(
-            hsi_dim=hsi_dim,
-            rgb_channels=rgb_channels,
-            lidar_channels=lidar_channels,
-            num_classes=num_classes,
-            fusion_method=fusion_method
+        # Create RGB model
+        model = create_rgb_model(
+            model_type=model_type, num_classes=num_classes, **model_kwargs
         )
-        
-        # Metrics
-        self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        
-        self.train_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-        self.val_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-        self.test_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-    
-    def forward(self, hsi: torch.Tensor, rgb: torch.Tensor, lidar: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the model."""
-        return self.model(hsi, rgb, lidar)
-    
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], 
-                     batch_idx: int) -> torch.Tensor:
-        """Training step."""
-        hsi, rgb, lidar, y = batch
-        predictions = self.forward(hsi, rgb, lidar)
-        
-        loss = F.cross_entropy(predictions, y)
-        
-        # Update metrics
-        self.train_acc(predictions, y)
-        self.train_f1(predictions, y)
-        
-        # Log metrics
-        self.log('train/loss', loss, on_step=True, on_epoch=True)
-        self.log('train/accuracy', self.train_acc, on_epoch=True)
-        self.log('train/f1', self.train_f1, on_epoch=True)
-        
+
+        super().__init__(
+            model=model,
+            num_classes=num_classes,
+            learning_rate=learning_rate,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            weight_decay=weight_decay,
+            class_weights=class_weights,
+        )
+
+        self.log_images = log_images
+        self.logged_images_this_epoch = False
+
+    def _extract_modality_data(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Extract RGB data from batch."""
+        return batch["rgb"]
+
+    def validation_step(
+        self, batch: Dict[str, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
+        """Validation step with optional image logging."""
+        loss = super().validation_step(batch, batch_idx)
+
+        # Log sample images periodically
+        if (
+            self.log_images
+            and not self.logged_images_this_epoch
+            and batch_idx == 0
+            and self.trainer.current_epoch % 10 == 0
+        ):
+            self._log_sample_images(batch)
+            self.logged_images_this_epoch = True
+
         return loss
-    
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], 
-                       batch_idx: int) -> torch.Tensor:
-        """Validation step."""
-        hsi, rgb, lidar, y = batch
-        predictions = self.forward(hsi, rgb, lidar)
-        
-        loss = F.cross_entropy(predictions, y)
-        
-        # Update metrics
-        self.val_acc(predictions, y)
-        self.val_f1(predictions, y)
-        
-        # Log metrics
-        self.log('val/loss', loss, on_epoch=True)
-        self.log('val/accuracy', self.val_acc, on_epoch=True)
-        self.log('val/f1', self.val_f1, on_epoch=True)
-        
-        return loss
-    
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], 
-                 batch_idx: int) -> torch.Tensor:
-        """Test step."""
-        hsi, rgb, lidar, y = batch
-        predictions = self.forward(hsi, rgb, lidar)
-        
-        loss = F.cross_entropy(predictions, y)
-        
-        # Update metrics
-        self.test_acc(predictions, y)
-        self.test_f1(predictions, y)
-        
-        # Log metrics
-        self.log('test/loss', loss)
-        self.log('test/accuracy', self.test_acc)
-        self.log('test/f1', self.test_f1)
-        
-        return loss
-    
-    def configure_optimizers(self):
-        """Configure optimizers."""
-        if self.hparams.optimizer == 'adam':
-            return Adam(self.parameters(), lr=self.hparams.learning_rate)
-        elif self.hparams.optimizer == 'sgd':
-            return SGD(self.parameters(), lr=self.hparams.learning_rate, momentum=0.9)
-        else:
-            raise ValueError(f"Unknown optimizer: {self.hparams.optimizer}")
+
+    def on_validation_epoch_start(self):
+        """Reset image logging flag at start of validation epoch."""
+        self.logged_images_this_epoch = False
+
+    def _log_sample_images(self, batch: Dict[str, torch.Tensor]):
+        """Log sample RGB images with predictions."""
+        if not hasattr(self.logger, "experiment"):
+            return
+
+        # Get a few samples
+        rgb_images = batch["rgb"][:4]  # First 4 images
+        targets = batch["species_idx"][:4]
+
+        # Get predictions
+        with torch.no_grad():
+            logits = self.forward(rgb_images)
+            preds = torch.argmax(logits, dim=1)
+
+        # Normalize images for display (assuming they're in [0, 1] range)
+        images_np = rgb_images.cpu().numpy()
+
+        # Log to comet/tensorboard (implementation depends on logger)
+        try:
+            from lightning.pytorch.loggers import CometLogger
+
+            if isinstance(self.logger, CometLogger):
+                for i in range(len(images_np)):
+                    img = images_np[i].transpose(1, 2, 0)  # CHW -> HWC
+                    caption = f"True: {targets[i].item()}, Pred: {preds[i].item()}"
+                    self.logger.experiment.log_image(
+                        img,
+                        name=f"val_image_{i}_epoch_{self.trainer.current_epoch}",
+                        step=self.trainer.current_epoch,
+                    )
+        except ImportError:
+            pass  # comet not available
 
 
-class CNNClassificationModule(pl.LightningModule):
+class HSIClassifier(BaseTreeClassifier):
     """
-    Lightning module for CNN-based RGB classification.
+    Lightning module for hyperspectral-based tree species classification.
+
+    Includes HSI-specific evaluation features like spectral analysis.
     """
-    
-    def __init__(self,
-                 input_channels: int = 3,
-                 num_classes: int = 10,
-                 dropout_rate: float = 0.3,
-                 learning_rate: float = 1e-3,
-                 optimizer: str = 'adam'):
+
+    def __init__(
+        self,
+        model_type: str = "simple",
+        num_bands: int = 426,
+        num_classes: int = 10,
+        learning_rate: float = 1e-3,
+        optimizer: str = "adamw",
+        scheduler: str = "plateau",
+        weight_decay: float = 1e-4,
+        class_weights: Optional[torch.Tensor] = None,
+        **model_kwargs,
+    ):
         """
-        Initialize CNN classification module.
-        
+        Initialize HSI classifier.
+
         Args:
-            input_channels: Number of input channels
+            model_type: Type of HSI model ("simple", "spectral_cnn", "hypernet")
+            num_bands: Number of hyperspectral bands
             num_classes: Number of tree species classes
-            dropout_rate: Dropout rate for regularization
-            learning_rate: Learning rate for optimization
-            optimizer: Optimizer type
+            learning_rate: Learning rate for optimizer
+            optimizer: Optimizer type ('adam', 'adamw', 'sgd')
+            scheduler: Scheduler type ('plateau', 'cosine', 'step')
+            weight_decay: Weight decay for optimizer
+            class_weights: Optional class weights for imbalanced datasets
+            **model_kwargs: Additional arguments for model creation
         """
-        super().__init__()
-        self.save_hyperparameters()
-        
-        self.model = CNNClassifier(
-            input_channels=input_channels,
+        # Create HSI model
+        model = create_hsi_model(
+            model_type=model_type,
+            num_bands=num_bands,
             num_classes=num_classes,
-            dropout_rate=dropout_rate
+            **model_kwargs,
         )
-        
-        # Metrics
-        self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
-        
-        self.train_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-        self.val_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-        self.test_f1 = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='weighted')
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the model."""
-        return self.model(x)
-    
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Training step."""
-        x, y = batch
-        predictions = self.forward(x)
-        
-        loss = F.cross_entropy(predictions, y)
-        
-        # Update metrics
-        self.train_acc(predictions, y)
-        self.train_f1(predictions, y)
-        
-        # Log metrics
-        self.log('train/loss', loss, on_step=True, on_epoch=True)
-        self.log('train/accuracy', self.train_acc, on_epoch=True)
-        self.log('train/f1', self.train_f1, on_epoch=True)
-        
+
+        super().__init__(
+            model=model,
+            num_classes=num_classes,
+            learning_rate=learning_rate,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            weight_decay=weight_decay,
+            class_weights=class_weights,
+        )
+
+        self.num_bands = num_bands
+
+    def _extract_modality_data(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Extract HSI data from batch."""
+        return batch["hsi"]
+
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Test step with HSI-specific analysis."""
+        loss = super().test_step(batch, batch_idx)
+
+        # Add HSI-specific metrics if needed
+        # TODO: Add spectral band importance analysis
+        # TODO: Add spectral confusion analysis
+
         return loss
-    
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Validation step."""
-        x, y = batch
-        predictions = self.forward(x)
-        
-        loss = F.cross_entropy(predictions, y)
-        
-        # Update metrics
-        self.val_acc(predictions, y)
-        self.val_f1(predictions, y)
-        
-        # Log metrics
-        self.log('val/loss', loss, on_epoch=True)
-        self.log('val/accuracy', self.val_acc, on_epoch=True)
-        self.log('val/f1', self.val_f1, on_epoch=True)
-        
+
+
+class LiDARClassifier(BaseTreeClassifier):
+    """
+    Lightning module for LiDAR-based tree species classification.
+
+    Includes LiDAR-specific evaluation features like height analysis.
+    """
+
+    def __init__(
+        self,
+        model_type: str = "simple",
+        num_classes: int = 10,
+        learning_rate: float = 1e-3,
+        optimizer: str = "adamw",
+        scheduler: str = "plateau",
+        weight_decay: float = 1e-4,
+        class_weights: Optional[torch.Tensor] = None,
+        **model_kwargs,
+    ):
+        """
+        Initialize LiDAR classifier.
+
+        Args:
+            model_type: Type of LiDAR model ("simple", "height_cnn", "structural")
+            num_classes: Number of tree species classes
+            learning_rate: Learning rate for optimizer
+            optimizer: Optimizer type ('adam', 'adamw', 'sgd')
+            scheduler: Scheduler type ('plateau', 'cosine', 'step')
+            weight_decay: Weight decay for optimizer
+            class_weights: Optional class weights for imbalanced datasets
+            **model_kwargs: Additional arguments for model creation
+        """
+        # Create LiDAR model
+        model = create_lidar_model(
+            model_type=model_type, num_classes=num_classes, **model_kwargs
+        )
+
+        super().__init__(
+            model=model,
+            num_classes=num_classes,
+            learning_rate=learning_rate,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            weight_decay=weight_decay,
+            class_weights=class_weights,
+        )
+
+    def _extract_modality_data(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Extract LiDAR data from batch."""
+        return batch["lidar"]
+
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Test step with LiDAR-specific analysis."""
+        loss = super().test_step(batch, batch_idx)
+
+        # Add LiDAR-specific metrics if needed
+        # TODO: Add height distribution analysis
+        # TODO: Add structural pattern analysis
+
         return loss
-    
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Test step."""
-        x, y = batch
-        predictions = self.forward(x)
-        
-        loss = F.cross_entropy(predictions, y)
-        
-        # Update metrics
-        self.test_acc(predictions, y)
-        self.test_f1(predictions, y)
-        
-        # Log metrics
-        self.log('test/loss', loss)
-        self.log('test/accuracy', self.test_acc)
-        self.log('test/f1', self.test_f1)
-        
-        return loss
-    
-    def configure_optimizers(self):
-        """Configure optimizers."""
-        if self.hparams.optimizer == 'adam':
-            return Adam(self.parameters(), lr=self.hparams.learning_rate)
-        elif self.hparams.optimizer == 'sgd':
-            return SGD(self.parameters(), lr=self.hparams.learning_rate, momentum=0.9)
-        else:
-            raise ValueError(f"Unknown optimizer: {self.hparams.optimizer}")

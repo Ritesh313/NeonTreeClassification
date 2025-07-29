@@ -12,6 +12,16 @@ lightning_logs/
 results_temp_dir/
 .comet.config
 
+# Python packaging
+*.egg-info/
+build/
+dist/
+*.egg
+
+# uv
+.venv/
+uv.lock
+
 # Compiled source #
 ###################
 *.com

@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neon-tree-classification"
+version = "0.1.0"
+description = "Benchmarking framework for tree species classification using NEON remote sensing data"
+authors = [{name = "Ritesh Chowdhry"}]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+    "torch>=1.9.0",
+    "pytorch-lightning>=1.5.0",
+    "torchmetrics>=0.6.0",
+    "geopandas>=0.10.0",
+    "pandas>=1.3.0",
+    "numpy>=1.21.0",
+    "rasterio>=1.2.0",
+    "shapely>=1.8.0",
+    "pyproj>=3.2.0",
+    "h5py>=3.1.0",
+    "opencv-python>=4.5.0",
+    "psutil>=5.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black>=21.0",
+    "flake8>=3.9",
+    "jupyter>=1.0.0",
+]
+logging = [
+    "comet-ml>=3.30.0",
+    "tensorboard>=2.8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ritesh313/NeonTreeClassification"
+Repository = "https://github.com/Ritesh313/NeonTreeClassification"
+Issues = "https://github.com/Ritesh313/NeonTreeClassification/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["neon_tree_classification*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

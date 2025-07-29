@@ -1,152 +1,122 @@
 # NEON Tree Classification
 
-A Python package for processing NEON (National Ecological Observatory Network) tree crown annotation data and building machine learning models for tree species classification.
-
-National Ecological Observatory Network (NEON) offers a variety of data products, including airborne data from different forest sites. Airborne data includes RGB orthophotos, LiDAR (CHM) airborne data, and 426 band hyperspectral data. All products are available on https://data.neonscience.org/data-products/.
-
-## NEON Data Products Used
-
-- **RGB Orthophotos**: `DP3.30010.001` - High-resolution orthorectified camera imagery mosaic
-- **Hyperspectral Imagery**: `DP3.30006.002` - Spectrometer orthorectified surface bidirectional reflectance - mosaic  
-- **LiDAR CHM**: `DP3.30015.001` - Ecosystem structure (Canopy Height Model)
+A modular Python package for processing NEON airborne data and multi-modal tree species classification using RGB, hyperspectral, and LiDAR data.
 
 ## Features
 
-- **Shapefile Processing**: Handle coordinate system transformations and validation for NEON tree crown shapefiles
-- **HSI Tile Processing**: Convert and process hyperspectral imagery (HSI) tiles from H5 to GeoTIFF format
-- **Crown-Tile Intersection**: Match tree crown annotations with corresponding image tiles
-- **Data Pipeline**: End-to-end processing from raw NEON data to training-ready datasets
-- **Coordinate Validation**: Robust handling of invalid coordinates and CRS issues
+### Data Processing
+- **NEON data download**: Automated download of RGB, hyperspectral, and LiDAR tiles
+- **Shapefile processing**: Coordinate system transformations and validation for tree crowns
+- **Multi-modal tile processing**: Convert and process HSI (H5 → GeoTIFF), RGB, and LiDAR data
+- **Crown-tile intersection**: Match tree crown annotations with corresponding image tiles
+
+### Machine Learning
+- **Multi-modal models**: Separate architectures for RGB, hyperspectral (426 bands), and LiDAR
+- **Modular training**: PyTorch Lightning modules with CometML/TensorBoard logging
+- **Flexible data pipeline**: Clean tensor-only batches with configurable splits
+- **Modern packaging**: Uses `pyproject.toml` and `uv` for dependency management
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/Ritesh313/NeonTreeClassification.git
 cd NeonTreeClassification
 
-# Install in development mode
+# Install with uv (recommended)
+pip install uv
+uv sync
+
+# Or with pip
 pip install -e .
 ```
 
 ## Quick Start
 
-### 1. Process Shapefiles
+### Data Processing
 ```bash
+# Process NEON shapefiles
 python scripts/test_shapefile_processor.py
-```
 
-### 2. Process Tiles and Crowns
-```bash
+# Process tiles and match with crowns
 python scripts/process_tiles_to_crowns.py
 ```
 
-## Package Structure
+### Model Training
+```bash
+# Train RGB model
+python train.py --modality rgb --csv_path data/crowns.csv --data_dir data/
+
+# Train HSI model with CometML logging
+python train.py --modality hsi --logger comet --project_name my-project
+
+# Compare all modalities
+python compare_modalities.py --csv_path data/crowns.csv --data_dir data/
+```
+
+### Using in code
+```python
+# Data processing
+from neon_tree_classification.data.shapefile_processor import ShapefileProcessor
+
+processor = ShapefileProcessor()
+sites_df, summary = processor.process_shapefiles(destination_dir)
+
+# Model training
+from neon_tree_classification import NeonCrownDataModule, RGBClassifier
+
+datamodule = NeonCrownDataModule(
+    csv_path="data/crowns.csv",
+    base_data_dir="data/",
+    modalities=["rgb"],
+    batch_size=32
+)
+
+classifier = RGBClassifier(model_type="resnet", num_classes=10)
+
+import lightning as L
+trainer = L.Trainer(max_epochs=50)
+trainer.fit(classifier, datamodule)
+```
+
+## Architecture
 
 ```
 neon_tree_classification/
 ├── data/
-│   └── shapefile_processor.py    # Shapefile processing and CRS handling
+│   ├── dataset.py            # Multi-modal dataset
+│   ├── datamodule.py         # Lightning DataModule
+│   └── shapefile_processor.py # NEON shapefile processing
 ├── models/
-│   └── hsi_models.py            # PyTorch models for HSI classification
-├── processing/
-│   └── __init__.py              # Processing utilities
-└── utils/
-    └── __init__.py              # General utilities
+│   ├── rgb_models.py         # RGB architectures
+│   ├── hsi_models.py         # Hyperspectral architectures
+│   ├── lidar_models.py       # LiDAR architectures
+│   └── lightning_modules.py  # Training modules
+└── processing/               # NEON data processing utilities
 
 scripts/
-├── download_neon_all_modalities.py  # Data download scripts
-├── process_tiles_to_crowns.py       # Main processing pipeline
+├── download_neon_all_modalities.py  # Download NEON data
+├── process_tiles_to_crowns.py       # Tile processing pipeline
 └── test_shapefile_processor.py      # Test shapefile processing
-
-configs/                         # Configuration files
-notebooks/                       # Jupyter notebooks for analysis
-SLURM/                          # SLURM job scripts
-tests/                          # Unit tests
 ```
 
-## Workflow
+## NEON Data Products
 
-### 1. Download NEON Data
-Given the Northing, Easting, Year and Site, download the NEON data using the download scripts. There are functions to download the RGB, HSI, and LiDAR data.
-
-### 2. Process Shapefiles  
-Process tree crown annotation shapefiles with coordinate system correction and validation.
-
-### 3. Process Tiles and Crowns
-Run the full pipeline to match crown annotations with image tiles and create training datasets.
-
-## Usage Examples
-
-### Processing NEON Shapefiles
-
-```python
-from neon_tree_classification.data.shapefile_processor import ShapefileProcessor
-
-processor = ShapefileProcessor()
-
-# Consolidate shapefiles from subdirectories
-processor.consolidate_files(parent_dir, destination_dir)
-
-# Process with coordinate validation and CRS correction
-sites_df, summary = processor.process_shapefiles(destination_dir)
-```
-
-### Running the Tile Processing Pipeline
-
-```python
-from scripts.process_tiles_to_crowns import run_full_pipeline
-
-results = run_full_pipeline(
-    tiles_base_dir="/path/to/neon_tiles",
-    crown_csv_path="/path/to/clean_coordinates.csv", 
-    site="BART",
-    year="2019",
-    output_base_dir="/path/to/output"
-)
-```
-
-## Key Features
-
-### Coordinate System Handling
-- Automatic UTM zone detection by NEON site
-- CRS transformation and validation
-- Invalid coordinate filtering (infinite values, out-of-range)
-
-### Multi-Modal Processing
-- RGB imagery (GeoTIFF)
-- Hyperspectral imagery (H5 → GeoTIFF conversion) 
-- LiDAR CHM data (GeoTIFF)
-
-### Robust Data Validation
-- Geometry validation and cleaning
-- Coordinate range checking
-- File existence verification
-- Error handling and reporting
+- **RGB**: `DP3.30010.001` - High-resolution orthorectified imagery
+- **Hyperspectral**: `DP3.30006.002` - 426-band spectrometer reflectance  
+- **LiDAR**: `DP3.30015.001` - Canopy Height Model
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
+3. Submit a pull request
 
 ## Authors
 
-- Ritesh Chowdhry
+Ritesh Chowdhry
 
 ## Acknowledgments
 
-- National Ecological Observatory Network (NEON) for providing the data
+- National Ecological Observatory Network (NEON)
 - University of Florida Macrosystems project
-
-# Citations
-
-## NEON Airborne Data Products
-NEON (National Ecological Observatory Network). High-resolution orthorectified camera imagery mosaic (DP3.30010.001), RELEASE-2025. https://doi.org/10.48443/gdgn-3r69. Dataset accessed from https://data.neonscience.org/data-products/DP3.30010.001/RELEASE-2025 on April 3, 2025.
-
-NEON (National Ecological Observatory Network). Spectrometer orthorectified surface bidirectional reflectance - mosaic (DP3.30006.002), provisional data. Dataset accessed from https://data.neonscience.org/data-products/DP3.30006.002 on April 3, 2025. Data archived at [your DOI].
-
-NEON (National Ecological Observatory Network). Ecosystem structure (DP3.30015.001), RELEASE-2025. https://doi.org/10.48443/jqqd-1n30. Dataset accessed from https://data.neonscience.org/data-products/DP3.30015.001/RELEASE-2025 on April 3, 2025.
 

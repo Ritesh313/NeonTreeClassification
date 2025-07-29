@@ -19,6 +19,7 @@ from pathlib import Path
 import rpy2
 import math
 import re
+import sys
 import rpy2.robjects as robjects
 from rpy2.robjects.packages import importr
 from rpy2.rinterface_lib.callbacks import logger as rpy2_logger
@@ -28,11 +29,18 @@ from datetime import datetime
 # Configure R logging
 rpy2_logger.setLevel(logging.ERROR)
 
-# Import R packages
-base = importr('base')
-utils = importr('utils')
-stats = importr('stats')
-neonUtilities = importr('neonUtilities')
+# Import R packages with error handling
+try:
+    base = importr('base')
+    utils = importr('utils')
+    stats = importr('stats')
+    neonUtilities = importr('neonUtilities')
+    print("✅ R packages loaded successfully")
+except Exception as e:
+    print(f"❌ Error loading R packages: {e}")
+    print("Please ensure R is installed and neonUtilities package is available")
+    print("Install neonUtilities with: install.packages('neonUtilities') in R")
+    sys.exit(1)
 
 # Global data product codes
 RGB_PRODUCT = 'DP3.30010.001'
@@ -46,12 +54,18 @@ def get_hsi_product_code(year):
     Get the correct HSI product code based on year
     
     Args:
-        year: Year as string or int
+        year: Year as string or int (handles formats like "2019" or "2019 (1)")
         
     Returns:
         str: Appropriate HSI product code
     """
-    year_int = int(year)
+    # Extract numeric year from formats like "2019 (1)" or just "2019"
+    year_match = re.search(r'(\d{4})', str(year))
+    if year_match:
+        year_int = int(year_match.group(1))
+    else:
+        year_int = int(year)  # fallback for simple integer years
+        
     if year_int < 2022:
         return HSI_PRE2022_PRODUCT
     else:
@@ -253,11 +267,12 @@ def process_csv_and_download_data(csv_path, output_base_dir, modalities=['RGB', 
     # Clean up column names
     df.columns = [col.lower().strip() for col in df.columns]
     
-    # Find coordinate columns
-    easting_cols = [col for col in df.columns if re.search(r'(center_easting|easting|utm_x)', col)]
-    northing_cols = [col for col in df.columns if re.search(r'(center_northing|northing|utm_y)', col)]
+    # Find coordinate columns with improved detection
+    easting_cols = [col for col in df.columns if re.search(r'(center_easting|easting|utm_x|x_coord)', col, re.IGNORECASE)]
+    northing_cols = [col for col in df.columns if re.search(r'(center_northing|northing|utm_y|y_coord)', col, re.IGNORECASE)]
     
     if not easting_cols or not northing_cols:
+        print(f"Available columns: {list(df.columns)}")
         raise ValueError("Could not find easting/northing columns in the CSV file")
     
     easting_col = easting_cols[0]

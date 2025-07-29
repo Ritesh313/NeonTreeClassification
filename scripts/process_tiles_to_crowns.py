@@ -136,6 +136,28 @@ def organize_downloaded_tiles(tiles_base_dir):
     
     return tile_inventory
 
+def find_tile_for_crown(crown_coords, tile_inventory):
+    """
+    Find which tile contains a specific crown
+    
+    Args:
+        crown_coords: (easting, northing) of crown center
+        tile_inventory: Dictionary from organize_downloaded_tiles
+    
+    Returns:
+        tuple: (tile_easting, tile_northing) or (None, None) if not found
+    """
+    crown_x, crown_y = crown_coords
+    
+    # NEON tiles are 1km x 1km, starting at multiples of 1000
+    tile_x = int(crown_x // 1000) * 1000
+    tile_y = int(crown_y // 1000) * 1000
+    
+    if (tile_x, tile_y) in tile_inventory:
+        return tile_x, tile_y
+    
+    return None, None
+
 def convert_hsi_tile_to_tif(h5_file, output_dir, site, year, coords):
     """
     Convert a single HSI H5 file to GeoTIFF format
@@ -203,6 +225,103 @@ def convert_hsi_tile_to_tif(h5_file, output_dir, site, year, coords):
     
     return output_path
 
+def convert_hsi_tile_to_tif_memory_efficient(h5_file, output_dir, site, year, coords):
+    """
+    Memory-efficient version of HSI tile conversion.
+    Processes data in chunks to avoid memory issues with large files.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = f"{year}_{site}_{coords}_HSI.tif"
+    output_path = os.path.join(output_dir, output_file)
+    
+    # Check if file already exists
+    if os.path.exists(output_path):
+        print(f"    HSI TIF already exists: {coords}")
+        return output_path
+    
+    try:
+        with h5py.File(h5_file, 'r') as hdf:
+            # Get sitename from file attributes
+            sitename = list(hdf.keys())[0]
+            
+            # Get reflectance data and metadata
+            refl_group = hdf[sitename]['Reflectance']
+            refl_dataset = refl_group['Reflectance_Data']
+            
+            # Get metadata
+            epsg = str(refl_group['Metadata']['Coordinate_System']['EPSG Code'][()])
+            epsg = epsg.split("'")[1] if "'" in epsg else epsg
+            
+            map_info = str(refl_group['Metadata']['Coordinate_System']['Map_Info'][()])
+            map_info = map_info.split(",")
+            
+            # Get resolution and coordinates
+            pixel_width = float(map_info[5])
+            pixel_height = float(map_info[6])
+            x_min = float(map_info[3])
+            y_max = float(map_info[4])
+            
+            # Get scale factor and no data value
+            scale_factor = float(refl_dataset.attrs['Scale_Factor'])
+            no_data_val = float(refl_dataset.attrs['Data_Ignore_Value'])
+            
+            # Get dimensions
+            height, width, bands = refl_dataset.shape
+            
+            # Define band indices (remove water absorption bands)
+            band_indices = np.r_[0:425]
+            band_indices = np.delete(band_indices, np.r_[419:425])
+            band_indices = np.delete(band_indices, np.r_[283:315]) 
+            band_indices = np.delete(band_indices, np.r_[192:210])
+            
+            # Create geotransform
+            transform = Affine.translation(x_min, y_max) * Affine.scale(pixel_width, -pixel_height)
+            
+            # Process in chunks to manage memory
+            chunk_size = min(height, 500)  # Process 500 rows at a time
+            
+            # Create output file
+            with rasterio.open(
+                output_path,
+                'w',
+                driver='GTiff',
+                height=height,
+                width=width,
+                count=len(band_indices),
+                dtype=np.float32,  # Use float32 instead of original dtype to save memory
+                crs=f'EPSG:{epsg}',
+                transform=transform,
+                nodata=no_data_val,
+                compress='lzw'  # Add compression to save disk space
+            ) as dst:
+                
+                # Process data in chunks
+                for start_row in range(0, height, chunk_size):
+                    end_row = min(start_row + chunk_size, height)
+                    
+                    # Read chunk
+                    chunk_data = refl_dataset[start_row:end_row, :, band_indices]
+                    
+                    # Convert to float32 and rearrange dimensions
+                    chunk_data = chunk_data.astype(np.float32)
+                    chunk_data = np.moveaxis(chunk_data, 2, 0)  # (bands, rows, cols)
+                    
+                    # Write chunk
+                    for band_idx in range(len(band_indices)):
+                        dst.write(chunk_data[band_idx], band_idx + 1, 
+                                window=rasterio.windows.Window(0, start_row, width, end_row - start_row))
+                    
+                    print(f"    Processed rows {start_row}-{end_row} of {height}")
+        
+        print(f"    ✅ HSI conversion completed: {coords}")
+        return output_path
+        
+    except Exception as e:
+        print(f"    ❌ Error converting HSI {coords}: {e}")
+        # Clean up partial file
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return None
 def convert_all_hsi_tiles(tile_inventory, site, year, output_base_dir):
     """
     Convert all HSI tiles to TIF format
