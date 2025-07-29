@@ -118,5 +118,4 @@ Ritesh Chowdhry
 ## Acknowledgments
 
 - National Ecological Observatory Network (NEON)
-- University of Florida Macrosystems project
 
