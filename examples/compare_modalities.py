@@ -13,8 +13,8 @@ import torch
 import json
 from pathlib import Path
 
-from neon_tree_classification import (
-    NeonCrownDataModule,
+from neon_tree_classification.core.datamodule import NeonCrownDataModule
+from neon_tree_classification.models.lightning_modules import (
     RGBClassifier,
     HSIClassifier,
     LiDARClassifier,

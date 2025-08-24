@@ -197,14 +197,18 @@ def extract_crowns_from_shapefiles(shapefile_paths, target_crs="EPSG:4326"):
             subset=["individual_id", "geometry", "site", "plot", "year"]
         )
         cleaned = cleaned.reset_index(drop=True)
+        # Rename columns for final output
+        cleaned = cleaned.rename(
+            columns={"individual_id": "individual", "site": "siteID", "plot": "plotID"}
+        )
         return cleaned
     else:
         return gpd.GeoDataFrame(
             columns=[
-                "individual_id",
+                "individual",
                 "geometry",
-                "site",
-                "plot",
+                "siteID",
+                "plotID",
                 "year",
                 "source_file",
                 "center_easting",

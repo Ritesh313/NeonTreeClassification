@@ -23,26 +23,33 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "torch>=1.9.0",
-    "pytorch-lightning>=1.5.0",
-    "torchmetrics>=0.6.0",
-    "geopandas>=0.10.0",
+    # Core functionality (dataset + visualization)
     "pandas>=1.3.0",
-    "numpy>=1.21.0",
+    "numpy>=1.21.0", 
+    "matplotlib>=3.5.0",
     "rasterio>=1.2.0",
-    "shapely>=1.8.0",
-    "pyproj>=3.2.0",
-    "h5py>=3.1.0",
-    "opencv-python>=4.5.0",
-    "psutil>=5.8.0",
+    "scikit-learn>=1.0.0",
+    
+    # ML framework (for training examples)
+    "torch>=1.9.0",
+    "pytorch-lightning>=2.0.0",
+    "torchmetrics>=0.6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=6.0",
     "black>=21.0",
-    "flake8>=3.9",
+    "flake8>=3.9", 
     "jupyter>=1.0.0",
+]
+processing = [
+    # Only needed for advanced data processing
+    "geopandas>=0.10.0",
+    "shapely>=1.8.0", 
+    "pyproj>=3.2.0",
+    "h5py>=3.1.0",
+    "opencv-python>=4.5.0",
 ]
 logging = [
     "comet-ml>=3.30.0",

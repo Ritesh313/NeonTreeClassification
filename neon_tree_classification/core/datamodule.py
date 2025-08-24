@@ -46,6 +46,21 @@ class NeonCrownDataModule(L.LightningDataModule):
         train_transforms: Optional[Dict[str, Callable]] = None,
         val_transforms: Optional[Dict[str, Callable]] = None,
         test_transforms: Optional[Dict[str, Callable]] = None,
+        # RGB parameters
+        rgb_target_size: Optional[tuple] = (128, 128),
+        rgb_spatial_strategy: str = "resize",
+        rgb_padding_value: float = 0.0,
+        # HSI parameters
+        hsi_target_size: Optional[tuple] = (12, 12),
+        hsi_spatial_strategy: str = "pad",
+        hsi_padding_value: float = 0.0,
+        # LiDAR parameters
+        lidar_target_size: Optional[tuple] = (12, 12),
+        lidar_spatial_strategy: str = "pad",
+        lidar_padding_value: float = 0.0,
+        lidar_fill_nodata: bool = True,
+        # Common parameters
+        crop_if_larger: bool = True,
     ):
         """
         Initialize DataModule.
@@ -67,6 +82,17 @@ class NeonCrownDataModule(L.LightningDataModule):
             train_transforms: Transform functions for training
             val_transforms: Transform functions for validation
             test_transforms: Transform functions for testing
+            rgb_target_size: Target size (H, W) for RGB images. If None, no standardization.
+            rgb_spatial_strategy: 'resize' or 'pad' for RGB spatial handling
+            rgb_padding_value: Padding value for RGB when using 'pad' strategy
+            hsi_target_size: Target size (H, W) for HSI images. If None, no standardization.
+            hsi_spatial_strategy: 'resize' or 'pad' for HSI spatial handling
+            hsi_padding_value: Padding value for HSI when using 'pad' strategy
+            lidar_target_size: Target size (H, W) for LiDAR images. If None, no standardization.
+            lidar_spatial_strategy: 'resize' or 'pad' for LiDAR spatial handling
+            lidar_padding_value: Padding value for LiDAR when using 'pad' strategy
+            lidar_fill_nodata: Whether to fill NoData values in LiDAR
+            crop_if_larger: Whether to crop images larger than target size when padding
         """
         super().__init__()
 
@@ -81,6 +107,19 @@ class NeonCrownDataModule(L.LightningDataModule):
         self.split_seed = split_seed
         self.site_filter = site_filter
         self.year_filter = year_filter
+
+        # Spatial parameters
+        self.rgb_target_size = rgb_target_size
+        self.rgb_spatial_strategy = rgb_spatial_strategy
+        self.rgb_padding_value = rgb_padding_value
+        self.hsi_target_size = hsi_target_size
+        self.hsi_spatial_strategy = hsi_spatial_strategy
+        self.hsi_padding_value = hsi_padding_value
+        self.lidar_target_size = lidar_target_size
+        self.lidar_spatial_strategy = lidar_spatial_strategy
+        self.lidar_padding_value = lidar_padding_value
+        self.lidar_fill_nodata = lidar_fill_nodata
+        self.crop_if_larger = crop_if_larger
 
         # DataLoader parameters
         self.batch_size = batch_size
@@ -129,6 +168,17 @@ class NeonCrownDataModule(L.LightningDataModule):
                 site_filter=self.site_filter,
                 year_filter=self.year_filter,
                 transforms=None,  # We'll add transforms per split
+                rgb_target_size=self.rgb_target_size,
+                rgb_spatial_strategy=self.rgb_spatial_strategy,
+                rgb_padding_value=self.rgb_padding_value,
+                hsi_target_size=self.hsi_target_size,
+                hsi_spatial_strategy=self.hsi_spatial_strategy,
+                hsi_padding_value=self.hsi_padding_value,
+                lidar_target_size=self.lidar_target_size,
+                lidar_spatial_strategy=self.lidar_spatial_strategy,
+                lidar_padding_value=self.lidar_padding_value,
+                lidar_fill_nodata=self.lidar_fill_nodata,
+                crop_if_larger=self.crop_if_larger,
             )
 
             # Create label mapping
@@ -281,6 +331,17 @@ class NeonCrownDataModule(L.LightningDataModule):
             has_labels=True,
             transforms=transforms,
             label_to_idx=self.label_to_idx,
+            rgb_target_size=self.rgb_target_size,
+            rgb_spatial_strategy=self.rgb_spatial_strategy,
+            rgb_padding_value=self.rgb_padding_value,
+            hsi_target_size=self.hsi_target_size,
+            hsi_spatial_strategy=self.hsi_spatial_strategy,
+            hsi_padding_value=self.hsi_padding_value,
+            lidar_target_size=self.lidar_target_size,
+            lidar_spatial_strategy=self.lidar_spatial_strategy,
+            lidar_padding_value=self.lidar_padding_value,
+            lidar_fill_nodata=self.lidar_fill_nodata,
+            crop_if_larger=self.crop_if_larger,
         )
 
         # Clean up temp file

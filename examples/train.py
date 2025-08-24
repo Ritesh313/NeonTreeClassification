@@ -30,8 +30,8 @@ try:
 except ImportError:
     COMET_AVAILABLE = False
 
-from neon_tree_classification import (
-    NeonCrownDataModule,
+from neon_tree_classification.core.datamodule import NeonCrownDataModule
+from neon_tree_classification.models.lightning_modules import (
     RGBClassifier,
     HSIClassifier,
     LiDARClassifier,
@@ -57,7 +57,10 @@ def main():
         "--model_type", type=str, default="simple", help="Model architecture type"
     )
     parser.add_argument(
-        "--num_classes", type=int, default=10, help="Number of tree species classes"
+        "--num_classes",
+        type=int,
+        default=None,
+        help="Number of tree species classes (auto-detected if not provided)",
     )
     parser.add_argument(
         "--num_bands", type=int, default=426, help="Number of HSI bands (HSI only)"
@@ -136,6 +139,21 @@ def main():
         pin_memory=True,
     )
 
+    # Setup data to get number of classes
+    datamodule.setup()
+
+    # Auto-detect or validate number of classes
+    actual_num_classes = datamodule.num_classes
+    if args.num_classes is None:
+        args.num_classes = actual_num_classes
+        print(f"🔍 Auto-detected {args.num_classes} classes")
+    else:
+        if args.num_classes != actual_num_classes:
+            raise ValueError(
+                f"Mismatch: You specified {args.num_classes} classes, but dataset has {actual_num_classes} classes"
+            )
+        print(f"✅ Verified {args.num_classes} classes match dataset")
+
     # Create classifier based on modality
     if args.modality == "rgb":
         classifier = RGBClassifier(
@@ -207,7 +225,7 @@ def main():
     )
 
     # Setup data
-    datamodule.setup()
+    # datamodule.setup()  # Already called above for class detection
 
     # Get class weights for imbalanced datasets
     class_weights = datamodule.get_class_weights()

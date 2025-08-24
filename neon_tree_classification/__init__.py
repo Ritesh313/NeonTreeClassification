@@ -8,8 +8,8 @@ __version__ = "0.1.0"
 __author__ = "Ritesh Chowdhry"
 
 # Import key classes for easy access
-from .data.dataset import NeonCrownDataset
-from .data.datamodule import NeonCrownDataModule
+from .core.dataset import NeonCrownDataset
+from .core.datamodule import NeonCrownDataModule
 
 # Import model factory functions
 from .models.rgb_models import create_rgb_model
@@ -24,6 +24,15 @@ from .models.lightning_modules import (
     LiDARClassifier,
 )
 
+# Import utility functions
+from .core.visualization import (
+    plot_rgb,
+    plot_hsi,
+    plot_hsi_pca,
+    plot_hsi_spectra,
+    plot_lidar,
+)
+
 __all__ = [
     "NeonCrownDataset",
     "NeonCrownDataModule",
@@ -34,4 +43,10 @@ __all__ = [
     "RGBClassifier",
     "HSIClassifier",
     "LiDARClassifier",
+    # Visualization utilities
+    "plot_rgb",
+    "plot_hsi",
+    "plot_hsi_pca",
+    "plot_hsi_spectra",
+    "plot_lidar",
 ]

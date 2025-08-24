@@ -1,5 +1,25 @@
-"""Utility functions and helpers."""
+"""
+Utility modules for NEON Tree Classification.
 
-# TODO: Add utility modules as needed
+Provides visualization, data processing, and analysis utilities.
+"""
 
-__all__ = []
+from .visualization import (
+    plot_rgb,
+    plot_hsi,
+    plot_lidar,
+    plot_multimodal,
+    plot_spectral_profile,
+    create_hsi_rgb_composite,
+    get_hsi_band_info,
+)
+
+__all__ = [
+    "plot_rgb",
+    "plot_hsi",
+    "plot_lidar",
+    "plot_multimodal",
+    "plot_spectral_profile",
+    "create_hsi_rgb_composite",
+    "get_hsi_band_info",
+]

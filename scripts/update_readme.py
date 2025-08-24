@@ -1,13 +1,60 @@
-# NEON Multi-Modal Tree Species Dataset
+#!/usr/bin/env python3
+"""
+Simple script to update README.md with current dataset statistics using only pandas.
 
-Hyperspectral, RGB and LiDAR airborne data for **96 tree species** representing **5,518 individual trees** across **30 NEON sites** in North America.
+Usage:
+    python scripts/simple_update_readme.py
+"""
+
+import pandas as pd
+import datetime
+
+
+def get_dataset_stats(csv_path="training_data_clean.csv"):
+    """Get dataset statistics directly from CSV without importing the package."""
+    print(f"Loading dataset from {csv_path}...")
+    df = pd.read_csv(csv_path)
+
+    stats = {
+        "total_individuals": len(df),
+        "species_count": df["species"].nunique(),
+        "sites_count": df["site"].nunique(),
+        "years": sorted(df["year"].unique()),
+    }
+
+    # Species distribution
+    if "species_name" in df.columns:
+        species_name_counts = df["species_name"].value_counts()
+        stats["top_species_names"] = species_name_counts.head(10).to_dict()
+    else:
+        species_counts = df["species"].value_counts()
+        stats["top_species"] = species_counts.head(10).to_dict()
+
+    # Site distribution
+    site_counts = df["site"].value_counts()
+    stats["site_distribution"] = site_counts.to_dict()
+
+    return stats
+
+
+def update_readme():
+    """Update README.md with current dataset statistics."""
+
+    stats = get_dataset_stats()
+
+    print("Generating README content...")
+
+    # Generate the new README content
+    readme_content = f"""# NEON Multi-Modal Tree Species Dataset
+
+Hyperspectral, RGB and LiDAR airborne data for **{stats['species_count']} tree species** representing **{stats['total_individuals']:,} individual trees** across **{stats['sites_count']} NEON sites** in North America.
 
 ## Dataset Overview
 
-- **5,518** individual tree crowns
-- **96** unique species  
-- **30** NEON sites across North America
-- **2018-2020** (3 years of data)
+- **{stats['total_individuals']:,}** individual tree crowns
+- **{stats['species_count']}** unique species  
+- **{stats['sites_count']}** NEON sites across North America
+- **{stats['years'][0]}-{stats['years'][-1]}** ({len(stats['years'])} years of data)
 - **3 modalities:** RGB, Hyperspectral (426 bands), LiDAR CHM
 
 ## Quick Start
@@ -75,36 +122,39 @@ plot_lidar(sample['lidar_path'])
 
 ## Top Species
 
-The dataset includes 96 tree species. Here are the most common:
+The dataset includes {stats['species_count']} tree species. Here are the most common:
 
 | Rank | Species | Count | Percentage |
-|------|---------|-------|------------|
-| 1 | Picea mariana (Mill.) Britton, Sterns & Poggenb. | 678 | 12.3% |
-| 2 | Acer rubrum L. | 360 | 6.5% |
-| 3 | Pseudotsuga menziesii (Mirb.) Franco var. menziesii | 300 | 5.4% |
-| 4 | Populus tremuloides Michx. | 271 | 4.9% |
-| 5 | Quercus rubra L. | 243 | 4.4% |
-| 6 | Pinus palustris Mill. | 233 | 4.2% |
-| 7 | Tsuga canadensis (L.) Carrière | 200 | 3.6% |
-| 8 | Pinus contorta Douglas ex Loudon var. latifolia Engelm. ex S. Watson | 189 | 3.4% |
-| 9 | Abies lasiocarpa (Hook.) Nutt. var. lasiocarpa | 172 | 3.1% |
-| 10 | Betula neoalaskana Sarg. | 162 | 2.9% |
+|------|---------|-------|------------|"""
+
+    # Add top species table
+    if "top_species_names" in stats:
+        for i, (species, count) in enumerate(stats["top_species_names"].items(), 1):
+            percentage = count / stats["total_individuals"] * 100
+            readme_content += f"\n| {i} | {species} | {count:,} | {percentage:.1f}% |"
+    else:
+        for i, (species, count) in enumerate(stats["top_species"].items(), 1):
+            percentage = count / stats["total_individuals"] * 100
+            readme_content += f"\n| {i} | {species} | {count:,} | {percentage:.1f}% |"
+
+    readme_content += f"""
 
 ## Geographic Distribution
 
-Data collected from **30 NEON sites** across North America:
+Data collected from **{stats['sites_count']} NEON sites** across North America:
 
-**1.** DEJU: 577 samples (10.5%)  
-**2.** BART: 533 samples (9.7%)  
-**3.** BONA: 504 samples (9.1%)  
-**4.** HARV: 490 samples (8.9%)  
-**5.** MLBS: 368 samples (6.7%)  
-**6.** RMNP: 329 samples (6.0%)  
-**7.** DELA: 299 samples (5.4%)  
-**8.** NIWO: 276 samples (5.0%)  
-**9.** UNDE: 262 samples (4.7%)  
-**10.** TALL: 246 samples (4.5%)  
+"""
 
+    # Add top sites
+    site_items = list(stats["site_distribution"].items())
+    site_items.sort(key=lambda x: x[1], reverse=True)
+
+    for i, (site, count) in enumerate(site_items[:10], 1):
+        percentage = count / stats["total_individuals"] * 100
+        readme_content += f"**{i}.** {site}: {count:,} samples ({percentage:.1f}%)  \n"
+
+    # Add installation and usage sections
+    readme_content += f"""
 ## Installation
 
 ### Basic Installation
@@ -184,7 +234,7 @@ datamodule = NeonCrownDataModule(
 )
 
 # Train RGB model
-classifier = RGBClassifier(num_classes=96)
+classifier = RGBClassifier(num_classes={stats['species_count']})
 
 import lightning as L
 trainer = L.Trainer(max_epochs=50)
@@ -237,5 +287,19 @@ Ritesh Chowdhry
 ## Acknowledgments
 
 - National Ecological Observatory Network (NEON)
-- This dataset details were generated on 2025-08-24
+- This dataset details were generated on {datetime.datetime.now().strftime("%Y-%m-%d")}
 
+"""
+
+    # Write the README
+    with open("README.md", "w") as f:
+        f.write(readme_content)
+
+    print(f"✅ README.md updated successfully!")
+    print(f"   - {stats['total_individuals']:,} individuals")
+    print(f"   - {stats['species_count']} species")
+    print(f"   - {stats['sites_count']} sites")
+
+
+if __name__ == "__main__":
+    update_readme()
