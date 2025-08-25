@@ -72,7 +72,7 @@ def flatten_tiles_inventory(
                 for mod, source_path in mods.items():
                     # Get original file extension
                     ext = os.path.splitext(source_path)[1]
-                    
+
                     # new_filename = f"{site}_{year}_{x}_{y}_{mod}{ext}" # old file naming method
                     # Create hybrid filename: SITE_YEAR_<original_neon_name>
                     original_filename = os.path.basename(source_path)
@@ -130,9 +130,11 @@ def extract_coordinates(filename):
     if rgb_match:
         return int(rgb_match.group(3)), int(rgb_match.group(4))  # easting, northing
 
-    # HSI pattern: NEON_D##_SITE_DP3_EASTING_NORTHING_reflectance.h5
+    # HSI pattern: NEON_D##_SITE_DP3_EASTING_NORTHING_(bidirectional_)reflectance.h5
+    # Handles both pre-2022 (reflectance.h5) and post-2022 (bidirectional_reflectance.h5) naming
     hsi_match = re.search(
-        r"NEON_D\d+_[A-Z]{4}_DP3_(\d+)_(\d+)_reflectance\.h5$", basename
+        r"NEON_D\d+_[A-Z]{4}_DP3_(\d+)_(\d+)_(?:bidirectional_)?reflectance\.h5$",
+        basename,
     )
     if hsi_match:
         return int(hsi_match.group(1)), int(hsi_match.group(2))  # easting, northing

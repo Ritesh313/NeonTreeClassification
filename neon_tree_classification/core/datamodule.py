@@ -142,6 +142,7 @@ class NeonCrownDataModule(L.LightningDataModule):
         self.label_to_idx = None
         self.idx_to_label = None
         self.num_classes = None
+        self._setup_done = False  # Guard to prevent duplicate setup
 
     def _create_default_transforms(self) -> Dict[str, Callable]:
         """Create default transform functions."""
@@ -158,6 +159,11 @@ class NeonCrownDataModule(L.LightningDataModule):
         Args:
             stage: 'fit', 'validate', 'test', or 'predict'
         """
+        # Guard against duplicate setup
+        if self._setup_done:
+            print("⚡ DataModule already set up, skipping duplicate setup")
+            return
+
         if stage is None or stage in ["fit", "validate"]:
             # Create full dataset to analyze splits
             full_dataset = NeonCrownDataset(
@@ -208,6 +214,9 @@ class NeonCrownDataModule(L.LightningDataModule):
             print(f"  Val samples: {len(self.val_dataset)}")
             print(f"  Test samples: {len(self.test_dataset)}")
             print(f"  Num classes: {self.num_classes}")
+
+            # Mark setup as complete
+            self._setup_done = True
 
     def _create_label_mapping(self, dataset: NeonCrownDataset) -> None:
         """Create mapping between string labels and integer indices."""
@@ -392,20 +401,31 @@ class NeonCrownDataModule(L.LightningDataModule):
         if self.train_dataset is None:
             raise RuntimeError("Must call setup() before getting class weights")
 
-        # Count samples per class in training set
+        print("🔄 Calculating class weights...")
+
+        # More efficient: count from the original data instead of loading samples
+        # Get species from the training split's underlying data
         species_counts = {}
-        for i in range(len(self.train_dataset)):
-            sample = self.train_dataset[i]
-            species = sample["species"]
-            species_counts[species] = species_counts.get(species, 0) + 1
+
+        # Access the pandas DataFrame directly from train dataset
+        train_data = self.train_dataset.data
+        for _, row in train_data.iterrows():
+            species = row["species"]
+            # Convert to index using our mapping
+            species_idx = self.label_to_idx[species]
+            species_counts[species_idx] = species_counts.get(species_idx, 0) + 1
+
+        print(f"📊 Found {len(species_counts)} classes in training set")
 
         # Calculate weights (inverse frequency)
         total_samples = sum(species_counts.values())
         weights = []
-        for species in sorted(species_counts.keys()):
-            weight = total_samples / (len(species_counts) * species_counts[species])
+        # Sort by species index to maintain consistent ordering
+        for species_idx in sorted(species_counts.keys()):
+            weight = total_samples / (len(species_counts) * species_counts[species_idx])
             weights.append(weight)
 
+        print(f"✅ Class weights calculated successfully")
         return torch.tensor(weights, dtype=torch.float32)
 
     def get_species_mapping(self) -> Dict[str, int]:

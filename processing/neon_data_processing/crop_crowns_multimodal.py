@@ -15,7 +15,7 @@ Features:
 - Support for hybrid NEON filenames with preserved metadata
 
 Usage:
-    python crop_crowns_multimodal.py --tiles_dir /path/to/curated_tiles --crowns_gpkg /path/to/crowns.gpkg --output_dir /path/to/output
+    python crop_crowns_multimodal.py --tiles_dir /path/to/curated_tiles --crowns_gpkg /path/to/crowns.gpkg --output_dir /path/to/output --modality_subdir
 
 Author: NEON Tree Classification Team
 Date: August 2025
@@ -58,9 +58,11 @@ def extract_coordinates(filename):
     if rgb_match:
         return int(rgb_match.group(3)), int(rgb_match.group(4))  # easting, northing
 
-    # HSI pattern: NEON_D##_SITE_DP3_EASTING_NORTHING_reflectance.(h5|tif)
+    # HSI pattern: NEON_D##_SITE_DP3_EASTING_NORTHING_(bidirectional_)reflectance.h5
+    # Handles both pre-2022 (reflectance.h5) and post-2022 (bidirectional_reflectance.h5) naming
     hsi_match = re.search(
-        r"NEON_D\d+_[A-Z]{4}_DP3_(\d+)_(\d+)_reflectance\.(h5|tif)$", basename
+        r"NEON_D\d+_[A-Z]{4}_DP3_(\d+)_(\d+)_(?:bidirectional_)?reflectance\.(h5|tif)$",
+        basename,
     )
     if hsi_match:
         return int(hsi_match.group(1)), int(hsi_match.group(2))  # easting, northing
@@ -143,8 +145,8 @@ def create_tile_inventory(
         },  # NEON LiDAR files end with _CHM.tif
         "hsi": {
             "subdir": "hsi_tif",
-            "pattern": "*_reflectance.tif",
-        },  # Converted HSI files end with _reflectance.tif
+            "pattern": "*reflectance.tif",
+        },  # Converted HSI files end with reflectance.tif (includes bidirectional_reflectance.tif)
     }
 
     total_files = 0
@@ -452,6 +454,104 @@ def crop_crown_from_raster(
         return None
 
 
+def crop_crown_from_open_raster(
+    src: rasterio.DatasetReader,
+    crown_geometry,
+    crown_id: str,
+    modality: str,
+    output_dir: str,
+    modality_subdir: bool = False,
+    buffer_meters: float = 2.0,
+    min_size_pixels: int = 5,
+) -> Optional[Dict[str, Any]]:
+    """
+    Crop a single crown from an already-open raster file.
+    OPTIMIZED version that works with an open rasterio dataset.
+
+    Args:
+        src: Open rasterio dataset reader
+        crown_geometry: Crown polygon geometry
+        crown_id: Unique identifier for the crown (includes site_year prefix)
+        modality: Modality name (rgb, lidar, hsi)
+        output_dir: Base output directory
+        modality_subdir: Whether to organize by modality subdirectories
+        buffer_meters: Buffer around crown in meters
+        min_size_pixels: Minimum size in pixels for valid crop
+
+    Returns:
+        Dict with crop metadata or None if failed
+    """
+    try:
+        # Calculate buffer in pixels
+        pixel_size_x = src.transform[0]
+        pixel_size_y = abs(src.transform[4])
+        buffer_pixels_x = buffer_meters / pixel_size_x
+        buffer_pixels_y = buffer_meters / pixel_size_y
+
+        # Buffer the crown geometry
+        buffered_geom = crown_geometry.buffer(
+            max(buffer_pixels_x * pixel_size_x, buffer_pixels_y * pixel_size_y)
+        )
+
+        # Crop the raster
+        try:
+            out_image, out_transform = mask(
+                src, [buffered_geom], crop=True, nodata=src.nodata
+            )
+
+            # Check if crop is large enough
+            if (
+                out_image.shape[1] < min_size_pixels
+                or out_image.shape[2] < min_size_pixels
+            ):
+                return None
+
+            # Determine output path - either in modality subdir or flat
+            if modality_subdir:
+                modality_dir = os.path.join(output_dir, modality)
+                os.makedirs(modality_dir, exist_ok=True)
+                output_filename = f"{crown_id}.tif"
+                output_path = os.path.join(modality_dir, output_filename)
+            else:
+                os.makedirs(output_dir, exist_ok=True)
+                output_filename = f"{crown_id}_{modality}.tif"
+                output_path = os.path.join(output_dir, output_filename)
+
+            # Write the cropped image
+            out_meta = src.meta.copy()
+            out_meta.update(
+                {
+                    "driver": "GTiff",
+                    "height": out_image.shape[1],
+                    "width": out_image.shape[2],
+                    "transform": out_transform,
+                    "compress": "lzw",
+                }
+            )
+
+            with rasterio.open(output_path, "w", **out_meta) as dst:
+                dst.write(out_image)
+
+            return {
+                "crown_id": crown_id,
+                "modality": modality,
+                "output_path": output_path,
+                "width": out_image.shape[2],
+                "height": out_image.shape[1],
+                "bands": out_image.shape[0],
+                "success": True,
+                "processing_time": datetime.now().isoformat(),
+            }
+
+        except ValueError:
+            # This can happen if crown doesn't intersect the raster
+            return None
+
+    except Exception as e:
+        print(f"❌ Error cropping {crown_id} from open raster: {e}")
+        return None
+
+
 def process_crowns_in_tile(
     tile_key: Tuple[str, int, int, int],
     crown_indices: List[int],
@@ -463,6 +563,7 @@ def process_crowns_in_tile(
 ) -> Dict[str, Any]:
     """
     Process all crowns in a single tile across all available modalities.
+    OPTIMIZED: Opens each raster file only once per tile, not once per crown.
 
     Args:
         tile_key: Tuple of (site, year, x, y)
@@ -496,53 +597,84 @@ def process_crowns_in_tile(
     else:
         crown_gdf_transformed = crown_gdf.copy()
 
-    # Process each crown
-    for crown_idx in crown_indices:
-        crown = crown_gdf_transformed.loc[crown_idx]  # Use loc to access by index
+    # OPTIMIZATION: Process by modality to open each raster file only once
+    for modality, raster_path in tile_data.items():
+        try:
+            with rasterio.open(raster_path) as src:
+                # Get the modality from filename using NEON naming conventions
+                if "_image.tif" in raster_path:  # NEON RGB files
+                    modality_name = "rgb"
+                elif "_CHM.tif" in raster_path:  # NEON LiDAR files
+                    modality_name = "lidar"
+                elif "_reflectance.tif" in raster_path:  # Converted HSI files
+                    modality_name = "hsi"
+                else:
+                    modality_name = "unknown"
 
-        # Create unique crown ID with site_year prefix
-        crown_individual = crown.get(
-            "individual", crown.get("individualID", f"crown_{crown_idx}")
-        )
-        # Format: SITE_YEAR_individualID_crownidx (e.g., HARV_2019_NEON.PLA.D01.HARV.12345_1234)
-        crown_id = f"{site}_{year}_{crown_individual}_{crown_idx}"
+                results["modalities_processed"].add(modality_name)
 
-        # Process across all available modalities
-        for modality, raster_path in tile_data.items():
-            crop_result = crop_crown_from_raster(
-                raster_path=raster_path,
-                crown_geometry=crown.geometry,  # Now using correctly transformed geometry
-                crown_id=crown_id,
-                output_dir=output_base_dir,
-                modality_subdir=modality_subdir,
-                buffer_meters=buffer_meters,
-            )
+                # Process ALL crowns for this modality with the open raster
+                for crown_idx in crown_indices:
+                    crown = crown_gdf_transformed.loc[crown_idx]
 
-            if crop_result:
-                # Add crown metadata to the result
-                crop_result.update(
-                    {
-                        "site": site,
-                        "year": year,
-                        "tile_x": x,
-                        "tile_y": y,
-                        "crown_idx": crown_idx,
-                        "individual": crown_individual,
-                    }
+                    # Create unique crown ID with site_year prefix
+                    crown_individual = crown.get(
+                        "individual", crown.get("individualID", f"crown_{crown_idx}")
+                    )
+                    # Format: SITE_YEAR_individualID_crownidx (e.g., HARV_2019_NEON.PLA.D01.HARV.12345_1234)
+                    crown_id = f"{site}_{year}_{crown_individual}_{crown_idx}"
+
+                    # Crop from the already-open raster
+                    crop_result = crop_crown_from_open_raster(
+                        src=src,
+                        crown_geometry=crown.geometry,
+                        crown_id=crown_id,
+                        modality=modality_name,
+                        output_dir=output_base_dir,
+                        modality_subdir=modality_subdir,
+                        buffer_meters=buffer_meters,
+                    )
+
+                    if crop_result:
+                        # Add crown metadata to the result
+                        crop_result.update(
+                            {
+                                "site": site,
+                                "year": year,
+                                "tile_x": x,
+                                "tile_y": y,
+                                "crown_idx": crown_idx,
+                                "individual": crown_individual,
+                            }
+                        )
+                        results["successful_crops"].append(crop_result)
+                    else:
+                        results["failed_crops"].append(
+                            {
+                                "crown_id": crown_id,
+                                "modality": modality_name,
+                                "reason": "crop_failed",
+                            }
+                        )
+
+        except Exception as e:
+            print(f"❌ Error opening raster {raster_path}: {e}")
+            # Mark all crowns as failed for this modality
+            for crown_idx in crown_indices:
+                crown = crown_gdf_transformed.loc[crown_idx]
+                crown_individual = crown.get(
+                    "individual", crown.get("individualID", f"crown_{crown_idx}")
                 )
-                results["successful_crops"].append(crop_result)
-                results["modalities_processed"].add(modality)
-            else:
+                crown_id = f"{site}_{year}_{crown_individual}_{crown_idx}"
                 results["failed_crops"].append(
                     {
                         "crown_id": crown_id,
                         "modality": modality,
-                        "reason": "crop_failed",
+                        "reason": f"raster_open_failed: {str(e)}",
                     }
                 )
 
-        results["crowns_processed"] += 1
-
+    results["crowns_processed"] = len(crown_indices)
     return results
 
 

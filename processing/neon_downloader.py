@@ -19,7 +19,6 @@ import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import rpy2.robjects as robjects
 from rpy2.robjects import pandas2ri, r
-from rpy2.robjects.conversion import localconverter
 import warnings
 import geopandas as gpd
 import json
@@ -52,7 +51,7 @@ class NEONDownloader:
             base_output_dir: Base directory for downloaded data
         """
         self.base_output_dir = base_output_dir
-        self.download_logs = {}  # Track download attempts and results
+        self.download_results = []  # Simple list to track all downloads
         self._setup_r_environment()
 
     def _setup_r_environment(self):
@@ -71,431 +70,6 @@ class NEONDownloader:
             print("  R: install.packages('neonUtilities')")
             raise
 
-    def _get_expected_neon_file_patterns(
-        self, modality: str, site: str, year: int, tile_coords: List[Tuple[int, int]]
-    ) -> Dict[str, List[str]]:
-        """
-        Generate expected NEON file patterns for validation.
-        Accounts for the nested NEON directory structure.
-
-        Args:
-            modality: Data modality ('rgb', 'hsi', 'lidar')
-            site: NEON site code
-            year: Year of data
-            tile_coords: List of (easting, northing) tile coordinates
-
-        Returns:
-            Dict mapping tile coordinates to expected file patterns
-        """
-        expected_files = {}
-
-        for x, y in tile_coords:
-            patterns = []
-
-            if modality == "rgb":
-                # RGB: .../L3/Camera/Mosaic/YYYY_SITE_5_XXXXXX_YYYYYY_image.tif
-                pattern = f"**/**/L3/Camera/Mosaic/{year}_{site}_*_{x}_{y}_image.tif"
-                patterns.append(pattern)
-
-            elif modality == "hsi":
-                # HSI: .../L3/Spectrometer/Reflectance/NEON_D??_SITE_DP3_XXXXXX_YYYYYY_reflectance.h5
-                pattern = f"**/**/L3/Spectrometer/Reflectance/NEON_*_{site}_DP3_{x}_{y}_reflectance.h5"
-                patterns.append(pattern)
-
-            elif modality == "lidar":
-                # LiDAR: .../L3/DiscreteLidar/CanopyHeightModelGtif/NEON_D??_SITE_DP3_XXXXXX_YYYYYY_CHM.tif
-                pattern = f"**/**/L3/DiscreteLidar/CanopyHeightModelGtif/NEON_*_{site}_DP3_{x}_{y}_CHM.tif"
-                patterns.append(pattern)
-
-            expected_files[f"{x}_{y}"] = patterns
-
-        return expected_files
-
-    def _validate_downloaded_files(
-        self,
-        output_dir: str,
-        modality: str,
-        site: str,
-        year: int,
-        tile_coords: List[Tuple[int, int]],
-    ) -> Dict[str, Any]:
-        """
-        Validate that expected files were actually downloaded.
-        Searches through the NEON nested directory structure.
-
-        Args:
-            output_dir: Output directory for this modality
-            modality: Data modality
-            site: NEON site code
-            year: Year
-            tile_coords: Expected tile coordinates
-
-        Returns:
-            Dict with validation results
-        """
-        import glob
-
-        validation = {
-            "modality": modality,
-            "site": site,
-            "year": year,
-            "expected_tiles": len(tile_coords),
-            "found_tiles": 0,
-            "missing_tiles": [],
-            "found_files": {},
-            "validation_time": pd.Timestamp.now().isoformat(),
-        }
-
-        expected_patterns = self._get_expected_neon_file_patterns(
-            modality, site, year, tile_coords
-        )
-
-        for x, y in tile_coords:
-            tile_key = f"{x}_{y}"
-            found_file = None
-
-            # Search for files matching the expected patterns
-            for pattern in expected_patterns[tile_key]:
-                full_pattern = os.path.join(output_dir, pattern)
-                matches = glob.glob(full_pattern, recursive=True)
-
-                if matches:
-                    found_file = matches[0]  # Take first match
-                    break
-
-            if found_file and os.path.exists(found_file):
-                validation["found_files"][tile_key] = {
-                    "path": found_file,
-                    "size_bytes": os.path.getsize(found_file),
-                    "exists": True,
-                }
-                validation["found_tiles"] += 1
-            else:
-                validation["missing_tiles"].append(
-                    {
-                        "tile_coord": (x, y),
-                        "expected_patterns": expected_patterns[tile_key],
-                    }
-                )
-
-        validation["success_rate"] = (
-            validation["found_tiles"] / validation["expected_tiles"]
-            if validation["expected_tiles"] > 0
-            else 0
-        )
-
-        return validation
-
-    def _log_download_attempt(
-        self, site: str, year: int, modality: str, tile_coords: List[Tuple[int, int]]
-    ):
-        """Log a download attempt before calling R function"""
-        log_key = f"{site}_{year}_{modality}"
-
-        self.download_logs[log_key] = {
-            "site": site,
-            "year": year,
-            "modality": modality,
-            "requested_tiles": len(tile_coords),
-            "tile_coordinates": tile_coords,
-            "attempt_time": pd.Timestamp.now().isoformat(),
-            "status": "attempting",
-            "r_success": None,
-            "validation_results": None,
-        }
-
-    def _save_download_logs(self, output_dir: str):
-        """Save comprehensive download logs to JSON and CSV files"""
-        log_dir = os.path.join(output_dir, "download_logs")
-        os.makedirs(log_dir, exist_ok=True)
-
-        # Save full logs as JSON
-        json_path = os.path.join(log_dir, "full_download_log.json")
-        with open(json_path, "w") as f:
-            json.dump(self.download_logs, f, indent=2, default=str)
-
-        # Create summary CSV
-        summary_data = []
-        for log_key, log_data in self.download_logs.items():
-            validation = log_data.get("validation_results", {})
-
-            summary_data.append(
-                {
-                    "site": log_data["site"],
-                    "year": log_data["year"],
-                    "modality": log_data["modality"],
-                    "requested_tiles": log_data["requested_tiles"],
-                    "r_download_success": log_data.get("r_success", False),
-                    "found_tiles": validation.get("found_tiles", 0),
-                    "missing_tiles": validation.get("expected_tiles", 0)
-                    - validation.get("found_tiles", 0),
-                    "success_rate": validation.get("success_rate", 0.0),
-                    "status": log_data.get("status", "unknown"),
-                }
-            )
-
-        if summary_data:
-            summary_df = pd.DataFrame(summary_data)
-            csv_path = os.path.join(log_dir, "download_summary.csv")
-            summary_df.to_csv(csv_path, index=False)
-
-            print(f"\n📋 Download logs saved:")
-            print(f"  Full log: {json_path}")
-            print(f"  Summary: {csv_path}")
-
-            return json_path, csv_path
-
-        return None, None
-
-    def generate_missing_tiles_report(self, output_dir: str) -> str:
-        """Generate a detailed report of missing tiles for re-download"""
-        missing_tiles = []
-
-        for log_key, log_data in self.download_logs.items():
-            validation = log_data.get("validation_results", {})
-
-            for missing_info in validation.get("missing_tiles", []):
-                missing_tiles.append(
-                    {
-                        "site": log_data["site"],
-                        "year": log_data["year"],
-                        "modality": log_data["modality"],
-                        "easting": missing_info["tile_coord"][0],
-                        "northing": missing_info["tile_coord"][1],
-                        "expected_patterns": missing_info["expected_patterns"],
-                    }
-                )
-
-        if missing_tiles:
-            missing_df = pd.DataFrame(missing_tiles)
-            report_path = os.path.join(
-                output_dir, "download_logs", "missing_tiles_report.csv"
-            )
-            missing_df.to_csv(report_path, index=False)
-
-            print(f"\n⚠️  Missing Tiles Report: {report_path}")
-            print(f"📊 Total missing tiles: {len(missing_tiles)}")
-
-            # Summary by modality
-            missing_by_modality = missing_df.groupby("modality").size()
-            for modality, count in missing_by_modality.items():
-                print(f"  {modality.upper()}: {count} missing tiles")
-
-            return report_path
-        else:
-            print("✅ No missing tiles found!")
-            return None
-
-    def _init_download_log(self, site: str, year: int) -> Dict:
-        """Initialize download log structure for tracking"""
-        return {
-            "site": site,
-            "year": year,
-            "timestamp_start": datetime.now().isoformat(),
-            "timestamp_end": None,
-            "modalities": {},
-            "summary": {
-                "total_tiles_requested": 0,
-                "total_tiles_successful": 0,
-                "total_tiles_failed": 0,
-                "success_rate": 0.0,
-            },
-        }
-
-    def _log_tile_request(
-        self,
-        download_log: Dict,
-        modality: str,
-        tile_coords: List[Tuple[int, int]],
-        product_code: str,
-        output_dir: str,
-    ) -> None:
-        """Log the tiles being requested for download"""
-        download_log["modalities"][modality] = {
-            "product_code": product_code,
-            "output_dir": output_dir,
-            "tiles_requested": [{"easting": e, "northing": n} for e, n in tile_coords],
-            "tiles_successful": [],
-            "tiles_failed": [],
-            "tiles_missing": [],
-            "r_command_success": False,
-            "download_timestamp": datetime.now().isoformat(),
-            "error_message": None,
-        }
-
-    def _extract_coords_from_filename(self, filename: str) -> Optional[Tuple[int, int]]:
-        """Extract easting/northing coordinates from NEON filename"""
-        # RGB pattern: YYYY_SITE_X_XXXXXX_YYYYYY_image.tif
-        match = re.search(r"_(\d+)_(\d+)_image\.tif$", filename)
-        if match:
-            return (int(match.group(1)), int(match.group(2)))
-
-        # HSI pattern: NEON_D01_SITE_DP3_XXXXXX_YYYYYY_YYYY_reflectance.h5
-        match = re.search(r"_(\d+)_(\d+)_\d+_reflectance\.h5$", filename)
-        if match:
-            return (int(match.group(1)), int(match.group(2)))
-
-        # LiDAR pattern: NEON_D01_SITE_DP3_XXXXXX_YYYYYY_YYYY_CHM.tif
-        match = re.search(r"_(\d+)_(\d+)_\d+_CHM\.tif$", filename)
-        if match:
-            return (int(match.group(1)), int(match.group(2)))
-
-        return None
-
-    def _update_download_log(
-        self,
-        download_log: Dict,
-        modality: str,
-        r_success: bool,
-        successful_tiles: List[Tuple[int, int]],
-        failed_tiles: List[Tuple[int, int]],
-        error_msg: str = None,
-    ) -> None:
-        """Update download log with results"""
-        modality_log = download_log["modalities"][modality]
-        modality_log["r_command_success"] = r_success
-        modality_log["tiles_successful"] = [
-            {"easting": e, "northing": n} for e, n in successful_tiles
-        ]
-        modality_log["tiles_failed"] = [
-            {"easting": e, "northing": n} for e, n in failed_tiles
-        ]
-        modality_log["error_message"] = error_msg
-
-        # Find missing tiles (requested but not successful)
-        requested_coords = set(
-            (t["easting"], t["northing"]) for t in modality_log["tiles_requested"]
-        )
-        successful_coords = set(successful_tiles)
-        missing_coords = requested_coords - successful_coords
-        modality_log["tiles_missing"] = [
-            {"easting": e, "northing": n} for e, n in missing_coords
-        ]
-
-    def _finalize_download_log(self, download_log: Dict, output_dir: str) -> str:
-        """Finalize download log and save to files"""
-        download_log["timestamp_end"] = datetime.now().isoformat()
-
-        # Calculate summary statistics
-        total_requested = 0
-        total_successful = 0
-        total_failed = 0
-
-        for modality_data in download_log["modalities"].values():
-            total_requested += len(modality_data["tiles_requested"])
-            total_successful += len(modality_data["tiles_successful"])
-            total_failed += len(modality_data["tiles_failed"])
-
-        download_log["summary"] = {
-            "total_tiles_requested": total_requested,
-            "total_tiles_successful": total_successful,
-            "total_tiles_failed": total_failed,
-            "success_rate": (
-                total_successful / total_requested if total_requested > 0 else 0.0
-            ),
-        }
-
-        # Save detailed JSON log
-        site = download_log["site"]
-        year = download_log["year"]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        json_log_path = os.path.join(
-            output_dir, f"{site}_{year}_download_log_{timestamp}.json"
-        )
-        with open(json_log_path, "w") as f:
-            json.dump(download_log, f, indent=2)
-
-        # Create human-readable summary report
-        summary_path = os.path.join(
-            output_dir, f"{site}_{year}_download_summary_{timestamp}.txt"
-        )
-        self._create_summary_report(download_log, summary_path)
-
-        # Create CSV of missing tiles for easy analysis
-        missing_csv_path = os.path.join(
-            output_dir, f"{site}_{year}_missing_tiles_{timestamp}.csv"
-        )
-        self._create_missing_tiles_csv(download_log, missing_csv_path)
-
-        return json_log_path
-
-    def _create_summary_report(self, download_log: Dict, output_path: str) -> None:
-        """Create human-readable summary report"""
-        with open(output_path, "w") as f:
-            f.write(f"NEON Download Summary Report\n")
-            f.write(f"=" * 50 + "\n")
-            f.write(f"Site: {download_log['site']}\n")
-            f.write(f"Year: {download_log['year']}\n")
-            f.write(f"Started: {download_log['timestamp_start']}\n")
-            f.write(f"Completed: {download_log['timestamp_end']}\n\n")
-
-            f.write(f"Overall Summary:\n")
-            f.write(
-                f"  Total tiles requested: {download_log['summary']['total_tiles_requested']}\n"
-            )
-            f.write(
-                f"  Total tiles successful: {download_log['summary']['total_tiles_successful']}\n"
-            )
-            f.write(
-                f"  Total tiles failed: {download_log['summary']['total_tiles_failed']}\n"
-            )
-            f.write(
-                f"  Success rate: {download_log['summary']['success_rate']:.1%}\n\n"
-            )
-
-            for modality, data in download_log["modalities"].items():
-                f.write(f"{modality.upper()} Modality:\n")
-                f.write(f"  Product code: {data['product_code']}\n")
-                f.write(f"  R command success: {data['r_command_success']}\n")
-                f.write(f"  Tiles requested: {len(data['tiles_requested'])}\n")
-                f.write(f"  Tiles successful: {len(data['tiles_successful'])}\n")
-                f.write(f"  Tiles failed: {len(data['tiles_failed'])}\n")
-                f.write(f"  Tiles missing: {len(data['tiles_missing'])}\n")
-
-                if data["error_message"]:
-                    f.write(f"  Error: {data['error_message']}\n")
-
-                if data["tiles_missing"]:
-                    f.write(f"  Missing tiles:\n")
-                    for tile in data["tiles_missing"][:10]:  # Show first 10
-                        f.write(f"    ({tile['easting']}, {tile['northing']})\n")
-                    if len(data["tiles_missing"]) > 10:
-                        f.write(f"    ... and {len(data['tiles_missing']) - 10} more\n")
-
-                f.write("\n")
-
-    def _create_missing_tiles_csv(self, download_log: Dict, output_path: str) -> None:
-        """Create CSV file listing all missing tiles for easy reprocessing"""
-        missing_tiles = []
-
-        for modality, data in download_log["modalities"].items():
-            for tile in data["tiles_missing"]:
-                missing_tiles.append(
-                    {
-                        "site": download_log["site"],
-                        "year": download_log["year"],
-                        "modality": modality,
-                        "product_code": data["product_code"],
-                        "easting": tile["easting"],
-                        "northing": tile["northing"],
-                        "r_command_success": data["r_command_success"],
-                        "error_message": data.get("error_message", ""),
-                    }
-                )
-
-        if missing_tiles:
-            df = pd.DataFrame(missing_tiles)
-            df.to_csv(output_path, index=False)
-            print(f"📋 Missing tiles saved to: {output_path}")
-        else:
-            # Create empty file to indicate no missing tiles
-            with open(output_path, "w") as f:
-                f.write(
-                    "site,year,modality,product_code,easting,northing,r_command_success,error_message\n"
-                )
-                f.write("# No missing tiles - all downloads successful!\n")
-
     def _get_hsi_product_code(self, year: int) -> str:
         """
         Get the appropriate HSI product code based on year.
@@ -512,7 +86,6 @@ class NEONDownloader:
     ) -> pd.DataFrame:
         """
         Basic coordinate validation for downloader input.
-        The validate_and_extract_crown_metadata.py script should have already done thorough validation.
 
         Args:
             coordinates_df: DataFrame with easting/northing coordinates
@@ -521,10 +94,10 @@ class NEONDownloader:
         Returns:
             Cleaned DataFrame with valid coordinates
         """
-        print(f"\\n🧹 VALIDATING COORDINATES FOR {site}")
+        print(f"🧹 Validating coordinates for {site}")
         print(f"Input coordinates: {len(coordinates_df)} entries")
 
-        # Basic sanity check - remove any potential NaN values that might have slipped through
+        # Basic sanity check - remove any potential NaN values
         initial_count = len(coordinates_df)
         coordinates_df = coordinates_df.dropna(
             subset=["center_easting", "center_northing"]
@@ -536,26 +109,12 @@ class NEONDownloader:
             )
 
         # Basic validation - ensure coordinates are reasonable UTM values
-        # UTM coordinates should be positive and within global UTM ranges
         valid_mask = (
             (coordinates_df["center_easting"] > 0)
-            & (coordinates_df["center_easting"] < 1000000)  # Max UTM easting ~834km
+            & (coordinates_df["center_easting"] < 1000000)  # Max UTM easting
             & (coordinates_df["center_northing"] > 0)
-            & (coordinates_df["center_northing"] < 10000000)  # Max UTM northing ~9329km
+            & (coordinates_df["center_northing"] < 10000000)  # Max UTM northing
         )
-
-        invalid_coords = coordinates_df[~valid_mask]
-        if len(invalid_coords) > 0:
-            print(
-                f"⚠️  Found {len(invalid_coords)} coordinates with invalid UTM ranges:"
-            )
-            for idx, row in invalid_coords.head(5).iterrows():  # Show max 5 examples
-                source_file = row.get("source_file", "unknown")
-                print(
-                    f"  {source_file}: E={row['center_easting']}, N={row['center_northing']}"
-                )
-            if len(invalid_coords) > 5:
-                print(f"  ... and {len(invalid_coords) - 5} more")
 
         coordinates_df = coordinates_df[valid_mask]
         print(f"✅ Valid coordinates: {len(coordinates_df)} entries")
@@ -578,11 +137,10 @@ class NEONDownloader:
         Returns:
             List of unique (easting, northing) tile coordinate pairs
         """
-        print(f"\\n📍 CONVERTING TO TILE COORDINATES")
+        print(f"📍 Converting to tile coordinates")
 
         # FIXED: Use floor to map crowns to correct tiles (not round)
         # NEON tiles are 1km x 1km starting at bottom-left corner
-        # Crown at (318500, 4880500) should map to tile (318000, 4880000), NOT (319000, 4881000)
         tile_eastings = (
             np.floor(coordinates_df["center_easting"] / 1000).astype(int) * 1000
         )
@@ -604,100 +162,44 @@ class NEONDownloader:
 
         return tile_coords
 
-    def download_neon_data(
+    def _validate_downloaded_files(
         self,
-        coordinates_df: pd.DataFrame,
+        output_dir: str,
+        modality: str,
         site: str,
         year: int,
-        modalities: List[str] = ["rgb", "hsi", "lidar"],
-        check_availability: bool = True,
-        check_size: bool = False,
-    ) -> Dict[str, Any]:
+        tile_coords: List[Tuple[int, int]],
+    ) -> int:
         """
-        Download NEON data for specified coordinates and modalities.
+        Simple validation - count how many tiles were actually downloaded.
 
         Args:
-            coordinates_df: DataFrame with coordinate information
+            output_dir: Output directory for this modality
+            modality: Data modality
             site: NEON site code
-            year: Year of data to download
-            modalities: List of data types to download ('rgb', 'hsi', 'lidar')
-            check_availability: Whether to check data availability first
+            year: Year
+            tile_coords: Expected tile coordinates
 
         Returns:
-            Dictionary with download results and summary
+            Number of tiles found
         """
-        # Ensure year is always an integer - handle both string and int inputs
-        try:
-            year = int(year)
-        except (ValueError, TypeError):
-            raise ValueError(
-                f"Year must be convertible to int, got: {year} (type: {type(year)})"
-            )
-        print(f"\\n  STARTING NEON DATA DOWNLOAD")
-        print(f"Site: {site}, Year: {year}")
-        print(f"Modalities: {modalities}")
-
-        # Clean coordinates
-        cleaned_coords = self._clean_coordinates(coordinates_df, site)
-        if len(cleaned_coords) == 0:
-            raise ValueError(f"No valid coordinates found for site {site}")
-
-        # Convert to tile coordinates
-        tile_coords = self._convert_to_tile_coordinates(cleaned_coords)
-
-        # Setup output directory
-        output_dir = os.path.join(self.base_output_dir, f"{site}_{year}")
-        os.makedirs(output_dir, exist_ok=True)
-
-        results = {
-            "site": site,
-            "year": year,
-            "total_tiles": len(tile_coords),
-            "downloads": {},
-            "errors": [],
+        # Define expected file patterns for each modality
+        file_patterns = {
+            "rgb": f"{year}_{site}_*_*_image.tif",
+            "hsi": f"NEON_*_{site}_*_*_*_reflectance.h5",
+            "lidar": f"NEON_*_{site}_*_*_*_CHM.tif",
         }
 
-        # Download each modality
-        for modality in modalities:
-            try:
-                print(f"\\n  Downloading {modality.upper()} data...")
+        pattern = file_patterns.get(modality, f"{year}_{site}_*_*_{modality}.*")
 
-                if modality == "hsi":
-                    product_code = self._get_hsi_product_code(year)
-                else:
-                    product_code = self.PRODUCTS[modality]
+        # Search for downloaded files
+        search_pattern = os.path.join(output_dir, "**", pattern)
+        downloaded_files = glob.glob(search_pattern, recursive=True)
 
-                success = self._download_modality(
-                    product_code=product_code,
-                    site=site,
-                    year=year,
-                    tile_coords=tile_coords,
-                    output_dir=output_dir,
-                    modality=modality,
-                    check_size=check_size,
-                )
+        found_tiles = len(downloaded_files)
+        print(f"    Found {found_tiles}/{len(tile_coords)} {modality} tiles")
 
-                results["downloads"][modality] = {
-                    "product_code": product_code,
-                    "success": success,
-                    "output_dir": os.path.join(output_dir, modality),
-                }
-
-            except Exception as e:
-                error_msg = f"Error downloading {modality}: {str(e)}"
-                print(f"❌ {error_msg}")
-                results["errors"].append(error_msg)
-                results["downloads"][modality] = {"success": False, "error": error_msg}
-
-        print(f"\\n✅ Download process completed for {site}_{year}")
-
-        # Save comprehensive logs
-        self._save_download_logs(output_dir)
-
-        # Generate missing tiles report
-        self.generate_missing_tiles_report(output_dir)
-
-        return results
+        return found_tiles
 
     def _download_modality(
         self,
@@ -708,7 +210,7 @@ class NEONDownloader:
         output_dir: str,
         modality: str,
         check_size: bool = False,
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
         Download a specific data modality using R neonUtilities.
 
@@ -719,19 +221,19 @@ class NEONDownloader:
             tile_coords: List of (easting, northing) coordinates
             output_dir: Output directory
             modality: Data modality name
+            check_size: Whether to check file size
 
         Returns:
-            Success status
+            Dictionary with download results
         """
         try:
-            # Log the download attempt
-            self._log_download_attempt(site, year, modality, tile_coords)
+            print(f"  Downloading {modality.upper()} data...")
 
             # Prepare coordinates for R
             eastings = [coord[0] for coord in tile_coords]
             northings = [coord[1] for coord in tile_coords]
 
-            # Convert to R vectors - FIXED: use robjects.FloatVector
+            # Convert to R vectors
             r_eastings = robjects.FloatVector(eastings)
             r_northings = robjects.FloatVector(northings)
 
@@ -776,46 +278,223 @@ class NEONDownloader:
             })
             """
 
-            print(f"Executing R download for {len(tile_coords)} tiles...")
+            print(f"    Executing R download for {len(tile_coords)} tiles...")
             result = r(r_command)
-
-            success = bool(result[0])
+            r_success = bool(result[0])
 
             # Validate what was actually downloaded
-            validation = self._validate_downloaded_files(
+            found_tiles = self._validate_downloaded_files(
                 modality_output, modality, site, year, tile_coords
             )
 
-            # Update log with results
-            log_key = f"{site}_{year}_{modality}"
-            if log_key in self.download_logs:
-                self.download_logs[log_key]["r_success"] = success
-                self.download_logs[log_key]["validation_results"] = validation
-                self.download_logs[log_key]["status"] = "completed"
-
-            if success:
-                print(f"✅ R command succeeded for {modality}")
-                print(
-                    f"📊 Validation: {validation['found_tiles']}/{validation['expected_tiles']} tiles found ({validation['success_rate']:.1%})"
-                )
-
-                if validation["missing_tiles"]:
-                    print(f"⚠️  {len(validation['missing_tiles'])} tiles are missing!")
-
+            if r_success:
+                print(f"    ✅ R command succeeded")
             else:
-                print(f"❌ R command failed for {modality}")
+                print(f"    ❌ R command failed")
 
-            return success
+            return {
+                "site": site,
+                "year": year,
+                "modality": modality,
+                "product_code": product_code,
+                "tiles_requested": len(tile_coords),
+                "r_success": r_success,
+                "tiles_found": found_tiles,
+                "success_rate": (
+                    found_tiles / len(tile_coords) if len(tile_coords) > 0 else 0
+                ),
+                "timestamp": datetime.now().isoformat(),
+            }
 
         except Exception as e:
-            print(f"❌ Exception during {modality} download: {str(e)}")
-            return False
+            print(f"    ❌ Exception during {modality} download: {str(e)}")
+            return {
+                "site": site,
+                "year": year,
+                "modality": modality,
+                "product_code": product_code,
+                "tiles_requested": len(tile_coords),
+                "r_success": False,
+                "tiles_found": 0,
+                "success_rate": 0.0,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+            }
+
+    def download_neon_data(
+        self,
+        coordinates_df: pd.DataFrame,
+        site: str,
+        year: int,
+        modalities: List[str] = ["rgb", "hsi", "lidar"],
+        check_size: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Download NEON data for specified coordinates and modalities.
+
+        Args:
+            coordinates_df: DataFrame with coordinate information
+            site: NEON site code
+            year: Year of data to download
+            modalities: List of data types to download ('rgb', 'hsi', 'lidar')
+            check_size: Whether to check file sizes before downloading
+
+        Returns:
+            Dictionary with download results and summary
+        """
+        # Ensure year is always an integer
+        try:
+            year = int(year)
+        except (ValueError, TypeError):
+            raise ValueError(
+                f"Year must be convertible to int, got: {year} (type: {type(year)})"
+            )
+
+        print(f"\n🚀 STARTING DOWNLOAD: {site} {year}")
+        print(f"Modalities: {modalities}")
+
+        # Clean coordinates
+        cleaned_coords = self._clean_coordinates(coordinates_df, site)
+        if len(cleaned_coords) == 0:
+            raise ValueError(f"No valid coordinates found for site {site}")
+
+        # Convert to tile coordinates
+        tile_coords = self._convert_to_tile_coordinates(cleaned_coords)
+
+        # Setup output directory
+        output_dir = os.path.join(self.base_output_dir, f"{site}_{year}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Download each modality
+        for modality in modalities:
+            if modality == "hsi":
+                product_code = self._get_hsi_product_code(year)
+            else:
+                product_code = self.PRODUCTS[modality]
+
+            result = self._download_modality(
+                product_code=product_code,
+                site=site,
+                year=year,
+                tile_coords=tile_coords,
+                output_dir=output_dir,
+                modality=modality,
+                check_size=check_size,
+            )
+
+            # Store result for final logging
+            self.download_results.append(result)
+
+        print(f"✅ Completed: {site} {year}")
+
+        return {
+            "site": site,
+            "year": year,
+            "total_tiles": len(tile_coords),
+            "output_dir": output_dir,
+        }
+
+    def save_final_log(self):
+        """Save one comprehensive log file at the very end"""
+        if not self.download_results:
+            print("No download results to save")
+            return
+
+        # Create master log directory
+        log_dir = os.path.join(self.base_output_dir, "download_logs")
+        os.makedirs(log_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Save detailed CSV
+        df = pd.DataFrame(self.download_results)
+        csv_path = os.path.join(log_dir, f"neon_download_log_{timestamp}.csv")
+        df.to_csv(csv_path, index=False)
+
+        # Save detailed JSON
+        json_path = os.path.join(log_dir, f"neon_download_log_{timestamp}.json")
+        with open(json_path, "w") as f:
+            json.dump(self.download_results, f, indent=2, default=str)
+
+        # Create summary report
+        report_path = os.path.join(log_dir, f"neon_download_summary_{timestamp}.txt")
+        with open(report_path, "w") as f:
+            f.write("NEON DOWNLOAD SUMMARY REPORT\n")
+            f.write("=" * 50 + "\n\n")
+
+            # Overall statistics
+            total_downloads = len(df)
+            r_successes = df["r_success"].sum()
+            total_tiles_requested = df["tiles_requested"].sum()
+            total_tiles_found = df["tiles_found"].sum()
+
+            f.write(f"OVERALL STATISTICS:\n")
+            f.write(f"  Total downloads: {total_downloads}\n")
+            f.write(
+                f"  R command successes: {r_successes}/{total_downloads} ({r_successes/total_downloads:.1%})\n"
+            )
+            f.write(
+                f"  Total tiles found: {total_tiles_found}/{total_tiles_requested} ({total_tiles_found/total_tiles_requested:.1%})\n\n"
+            )
+
+            # By modality
+            f.write(f"BY MODALITY:\n")
+            for modality in ["rgb", "hsi", "lidar"]:
+                mod_data = df[df["modality"] == modality]
+                if len(mod_data) > 0:
+                    mod_r_success = mod_data["r_success"].sum()
+                    mod_tiles_req = mod_data["tiles_requested"].sum()
+                    mod_tiles_found = mod_data["tiles_found"].sum()
+                    f.write(
+                        f"  {modality.upper()}: {mod_tiles_found}/{mod_tiles_req} tiles ({mod_tiles_found/mod_tiles_req:.1%}), {mod_r_success} R successes\n"
+                    )
+            f.write("\n")
+
+            # Failures
+            failures = df[df["r_success"] == False]
+            if len(failures) > 0:
+                f.write(f"FAILED DOWNLOADS ({len(failures)}):\n")
+                for _, row in failures.iterrows():
+                    error_msg = row.get("error", "R command failed")
+                    f.write(
+                        f"  {row['site']} {row['year']} {row['modality']}: {error_msg}\n"
+                    )
+                f.write("\n")
+
+            # Sites with missing tiles
+            missing = df[df["tiles_found"] < df["tiles_requested"]]
+            if len(missing) > 0:
+                f.write(f"PARTIAL DOWNLOADS ({len(missing)}):\n")
+                for _, row in missing.iterrows():
+                    missing_count = row["tiles_requested"] - row["tiles_found"]
+                    f.write(
+                        f"  {row['site']} {row['year']} {row['modality']}: {missing_count} missing tiles\n"
+                    )
+
+        print(f"\n📋 FINAL LOGS SAVED:")
+        print(f"  📊 Summary: {report_path}")
+        print(f"  📄 CSV: {csv_path}")
+        print(f"  📄 JSON: {json_path}")
+
+        # Print quick summary to console
+        print(f"\n🎯 DOWNLOAD SUMMARY:")
+        print(f"  Total downloads: {total_downloads}")
+        print(
+            f"  R successes: {r_successes}/{total_downloads} ({r_successes/total_downloads:.1%})"
+        )
+        print(
+            f"  Tiles found: {total_tiles_found}/{total_tiles_requested} ({total_tiles_found/total_tiles_requested:.1%})"
+        )
+
+        return csv_path, json_path, report_path
 
 
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Download NEON tiles for crowns.")
+    parser = argparse.ArgumentParser(
+        description="Download NEON tiles for crowns."
+    )
     parser.add_argument(
         "--coords-file",
         type=str,
@@ -877,6 +556,9 @@ def main():
                 modalities=args.modalities,
             )
             print(f"Done: {site} {year} - {results['total_tiles']} tiles")
+
+    # Save final consolidated log
+    downloader.save_final_log()
 
 
 if __name__ == "__main__":

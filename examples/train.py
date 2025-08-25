@@ -14,6 +14,8 @@ Usage examples:
 """
 
 import argparse
+import os
+from datetime import datetime
 import lightning as L
 from lightning.pytorch.callbacks import (
     ModelCheckpoint,
@@ -22,6 +24,10 @@ from lightning.pytorch.callbacks import (
 )
 from lightning.pytorch.loggers import TensorBoardLogger
 import torch
+
+# Optimize CUDA performance for Tensor Cores
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision("medium")
 
 try:
     from lightning.pytorch.loggers import CometLogger
@@ -39,6 +45,7 @@ from neon_tree_classification.models.lightning_modules import (
 
 
 def main():
+
     parser = argparse.ArgumentParser(description="Train NEON tree species classifier")
 
     # Data arguments
@@ -100,29 +107,39 @@ def main():
     parser.add_argument(
         "--num_workers", type=int, default=4, help="Number of data loader workers"
     )
+    parser.add_argument(
+        "--distributed", action="store_true", help="Enable distributed training"
+    )
 
     # Logging arguments
     parser.add_argument(
         "--logger", type=str, default="tensorboard", choices=["tensorboard", "comet"]
     )
-    parser.add_argument("--project_name", type=str, default="neon-tree-classification")
     parser.add_argument(
-        "--experiment_name",
+        "--output_dir",
         type=str,
-        help="Experiment name (auto-generated if not provided)",
+        help="Directory to save logs, checkpoints, and results (auto-generated if not provided)",
     )
 
     args = parser.parse_args()
 
-    # Set up experiment name
-    if args.experiment_name is None:
-        args.experiment_name = (
-            f"{args.modality}_{args.model_type}_{args.lr}_{args.batch_size}"
-        )
+    # Set up experiment name (auto-generate)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_name = (
+        f"{args.modality}_{args.model_type}_{args.lr}_{args.batch_size}_{timestamp}"
+    )
+
+    # Set up output directory (organize by modality and timestamp)
+    if args.output_dir is None:
+        args.output_dir = f"./outputs/{args.modality}_{timestamp}"
 
     print(f"🌲 Training {args.modality.upper()} classifier: {args.model_type}")
     print(f"📁 Data: {args.data_dir}")
-    print(f"🧪 Experiment: {args.experiment_name}")
+    print(f"🧪 Experiment: {experiment_name}")
+    print(f"💾 Output directory: {args.output_dir}")
+
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
 
     # Create data module
     datamodule = NeonCrownDataModule(
@@ -192,12 +209,10 @@ def main():
                 "CometML not available. Install with: pip install comet-ml"
             )
         logger = CometLogger(
-            project_name=args.project_name,
-            experiment_name=args.experiment_name,
-            save_dir="lightning_logs",
+            save_dir=args.output_dir,
         )
     else:
-        logger = TensorBoardLogger(save_dir="lightning_logs", name=args.experiment_name)
+        logger = TensorBoardLogger(save_dir=args.output_dir, name=experiment_name)
 
     # Set up callbacks
     callbacks = [
@@ -228,6 +243,7 @@ def main():
     # datamodule.setup()  # Already called above for class detection
 
     # Get class weights for imbalanced datasets
+    print("⚖️  Calculating class weights...")
     class_weights = datamodule.get_class_weights()
     if class_weights is not None:
         classifier.class_weights = class_weights

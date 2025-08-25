@@ -15,6 +15,11 @@ lightning_logs/
 results_temp_dir/
 .comet.config
 
+# Training outputs
+outputs/
+test_outputs*/
+*.ckpt
+
 # Python packaging
 *.egg-info/
 build/

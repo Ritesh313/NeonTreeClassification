@@ -183,9 +183,7 @@ class BaseTreeClassifier(L.LightningModule):
 
         # Scheduler
         if self.hparams.scheduler == "plateau":
-            scheduler = ReduceLROnPlateau(
-                optimizer, mode="min", factor=0.5, patience=5, verbose=True
-            )
+            scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
