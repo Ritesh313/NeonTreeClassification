@@ -67,13 +67,13 @@ def main():
         description="Filter rare species from NEON training data",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Example usage:
-  python filter_rare_species.py \\
-    --input neon_training_data.csv \\
-    --output neon_training_data_filtered.csv \\
-    --min-samples 6
+        Example usage:
+        python filter_rare_species.py \\
+            --input neon_training_data.csv \\
+            --output neon_training_data_filtered.csv \\
+            --min-samples 6
         """,
-    )
+        )
 
     parser.add_argument("--input", required=True, help="Path to input CSV file")
     parser.add_argument(

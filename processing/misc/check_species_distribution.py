@@ -1,27 +1,40 @@
 #!/usr/bin/env python3
-"""Check species distribution in the dataset"""
+"""
+Check species distribution in dataset.
+
+Usage:
+    python check_species_distribution.py dataset.csv
+"""
 import pandas as pd
+import argparse
 
-csv_path = "/blue/azare/riteshchowdhry/Macrosystems/Data_files/hand_annotated_neon/curated_tiles_20250822/cropped_crowns_modality_organized/training_data_filtered.csv"
-df = pd.read_csv(csv_path)
 
-print("📊 Species Distribution Analysis:")
-species_counts = df['species'].value_counts()
-print(f"Total species: {len(species_counts)}")
-print(f"Total samples: {len(df)}")
+def check_distribution(csv_path):
+    """Check and print species distribution."""
+    df = pd.read_csv(csv_path)
+    species_counts = df["species"].value_counts()
 
-# Check how many species have only 1 sample
-single_sample_species = species_counts[species_counts == 1]
-print(f"\nSpecies with only 1 sample: {len(single_sample_species)}")
-if len(single_sample_species) > 0:
-    print("These species:", single_sample_species.index.tolist()[:10])  # Show first 10
+    print(f"📊 Dataset: {len(df):,} samples, {len(species_counts)} species")
 
-# Check distribution
-print(f"\nSample count distribution:")
-print(f"1 sample: {(species_counts == 1).sum()} species")
-print(f"2-5 samples: {((species_counts >= 2) & (species_counts <= 5)).sum()} species")
-print(f"6-10 samples: {((species_counts >= 6) & (species_counts <= 10)).sum()} species")
-print(f"11+ samples: {(species_counts >= 11).sum()} species")
+    # Distribution breakdown
+    single = (species_counts == 1).sum()
+    few = ((species_counts >= 2) & (species_counts <= 5)).sum()
+    medium = ((species_counts >= 6) & (species_counts <= 10)).sum()
+    many = (species_counts >= 11).sum()
 
-print(f"\nTop 10 most common species:")
-print(species_counts.head(10))
+    print(f"   1 sample: {single} species")
+    print(f"   2-5 samples: {few} species")
+    print(f"   6-10 samples: {medium} species")
+    print(f"   11+ samples: {many} species")
+
+    print(f"\nTop 10 species:")
+    for species, count in species_counts.head(10).items():
+        print(f"   {species}: {count:,}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Check species distribution")
+    parser.add_argument("csv_path", help="Path to dataset CSV file")
+    args = parser.parse_args()
+
+    check_distribution(args.csv_path)

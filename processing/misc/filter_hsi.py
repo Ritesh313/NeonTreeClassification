@@ -1,36 +1,58 @@
 #!/usr/bin/env python3
 """
 Simple HSI corruption filter - removes samples with corrupted HSI files.
+
+Usage:
+    python filter_hsi.py input.csv output.csv [--bands 369] [--nodata-threshold 90]
 """
 
 import pandas as pd
 import rasterio
 import numpy as np
 from pathlib import Path
+import argparse
 
 
-def filter_corrupted_hsi(input_csv, output_csv):
-    """
-    Simple function to filter out samples with corrupted HSI files.
+def is_hsi_valid(hsi_path, expected_bands=369, nodata_threshold=90):
+    """Check if HSI file is valid."""
+    try:
+        if not Path(hsi_path).exists():
+            return False
 
-    Args:
-        input_csv: Path to input dataset CSV
-        output_csv: Path to save filtered dataset CSV
-    """
-    # Load dataset
+        with rasterio.open(hsi_path) as src:
+            if src.count != expected_bands or src.height < 2 or src.width < 2:
+                return False
+
+            band_data = src.read(1)
+            if src.nodata is not None:
+                nodata_pct = np.sum(band_data == src.nodata) / band_data.size * 100
+            else:
+                nodata_pct = (
+                    np.sum((band_data == -9999) | np.isnan(band_data))
+                    / band_data.size
+                    * 100
+                )
+
+            return nodata_pct <= nodata_threshold
+    except:
+        return False
+
+
+def filter_corrupted_hsi(input_csv, output_csv, bands=369, nodata_threshold=90):
+    """Filter out samples with corrupted HSI files."""
+    print(f"Loading dataset from {input_csv}...")
     df = pd.read_csv(input_csv)
+    print(f"Loaded {len(df)} samples")
 
-    # Check each HSI file
     valid_indices = []
     for i, row in df.iterrows():
-        hsi_path = row["hsi_path"]
-        if is_hsi_valid(hsi_path):
+        if (i + 1) % 1000 == 0:
+            print(f"Processed {i + 1}/{len(df)} samples")
+
+        if is_hsi_valid(row["hsi_path"], bands, nodata_threshold):
             valid_indices.append(i)
 
-    # Filter to keep only valid samples
     clean_df = df.iloc[valid_indices].reset_index(drop=True)
-
-    # Save clean dataset
     clean_df.to_csv(output_csv, index=False)
 
     print(
@@ -38,41 +60,23 @@ def filter_corrupted_hsi(input_csv, output_csv):
     )
 
 
-def is_hsi_valid(hsi_path):
-    """Check if HSI file is valid (not corrupted)."""
-    try:
-        if not Path(hsi_path).exists():
-            return False
-
-        with rasterio.open(hsi_path) as src:
-            # Basic checks
-            if src.count != 369:  # Should have 369 bands
-                return False
-            if src.height < 2 or src.width < 2:  # Should have reasonable dimensions
-                return False
-
-            # Check for excessive NoData
-            band_data = src.read(1)  # Check first band
-            if src.nodata is not None:
-                nodata_pct = np.sum(band_data == src.nodata) / band_data.size * 100
-            else:
-                # Check for common nodata values
-                nodata_pct = (
-                    np.sum((band_data == -9999) | np.isnan(band_data))
-                    / band_data.size
-                    * 100
-                )
-
-            if nodata_pct > 90:  # Reject if >90% NoData
-                return False
-
-        return True
-    except:
-        return False
-
-
 if __name__ == "__main__":
-    input_csv = "/blue/azare/riteshchowdhry/Macrosystems/Data_files/hand_annotated_neon/curated_tiles_20250822/cropped_crowns_modality_organized/training_data_filtered.csv"
-    output_csv = "training_data_clean.csv"
+    parser = argparse.ArgumentParser(
+        description="Filter corrupted HSI files from dataset"
+    )
+    parser.add_argument("input_csv", help="Input CSV file")
+    parser.add_argument("output_csv", help="Output CSV file")
+    parser.add_argument(
+        "--bands", type=int, default=369, help="Expected number of bands (default: 369)"
+    )
+    parser.add_argument(
+        "--nodata-threshold",
+        type=float,
+        default=90,
+        help="Max NoData percentage (default: 90)",
+    )
 
-    filter_corrupted_hsi(input_csv, output_csv)
+    args = parser.parse_args()
+    filter_corrupted_hsi(
+        args.input_csv, args.output_csv, args.bands, args.nodata_threshold
+    )

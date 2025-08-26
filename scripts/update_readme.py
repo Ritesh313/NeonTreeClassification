@@ -3,14 +3,15 @@
 Simple script to update README.md with current dataset statistics using only pandas.
 
 Usage:
-    python scripts/simple_update_readme.py
+    python scripts/update_readme.py --csv /path/to/data.csv --readme /path/to/README.md
 """
 
 import pandas as pd
 import datetime
+import argparse
 
 
-def get_dataset_stats(csv_path="training_data_clean.csv"):
+def get_dataset_stats(csv_path):
     """Get dataset statistics directly from CSV without importing the package."""
     print(f"Loading dataset from {csv_path}...")
     df = pd.read_csv(csv_path)
@@ -37,10 +38,9 @@ def get_dataset_stats(csv_path="training_data_clean.csv"):
     return stats
 
 
-def update_readme():
+def update_readme(csv_path, readme_path):
     """Update README.md with current dataset statistics."""
-
-    stats = get_dataset_stats()
+    stats = get_dataset_stats(csv_path)
 
     print("Generating README content...")
 
@@ -291,15 +291,24 @@ Ritesh Chowdhry
 
 """
 
-    # Write the README
-    with open("README.md", "w") as f:
+    # Write the README to the specified path
+    with open(readme_path, "w") as f:
         f.write(readme_content)
 
-    print(f"✅ README.md updated successfully!")
+    print(f"✅ README.md updated successfully at: {readme_path}")
     print(f"   - {stats['total_individuals']:,} individuals")
     print(f"   - {stats['species_count']} species")
     print(f"   - {stats['sites_count']} sites")
 
 
 if __name__ == "__main__":
-    update_readme()
+    parser = argparse.ArgumentParser(
+        description="Update README.md with dataset statistics"
+    )
+    parser.add_argument("--csv", required=True, help="Path to the dataset CSV file")
+    parser.add_argument(
+        "--readme", required=True, help="Path to the README.md file to update"
+    )
+
+    args = parser.parse_args()
+    update_readme(args.csv, args.readme)

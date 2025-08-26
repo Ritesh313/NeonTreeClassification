@@ -1,13 +1,13 @@
 # NEON Multi-Modal Tree Species Dataset
 
-Hyperspectral, RGB and LiDAR airborne data for **96 tree species** representing **5,518 individual trees** across **30 NEON sites** in North America.
+Hyperspectral, RGB and LiDAR airborne data for **162 tree species** representing **42,453 individual trees** across **27 NEON sites** in North America.
 
 ## Dataset Overview
 
-- **5,518** individual tree crowns
-- **96** unique species  
-- **30** NEON sites across North America
-- **2018-2020** (3 years of data)
+- **42,453** individual tree crowns
+- **162** unique species  
+- **27** NEON sites across North America
+- **2014-2023** (10 years of data)
 - **3 modalities:** RGB, Hyperspectral (426 bands), LiDAR CHM
 
 ## Quick Start
@@ -75,35 +75,35 @@ plot_lidar(sample['lidar_path'])
 
 ## Top Species
 
-The dataset includes 96 tree species. Here are the most common:
+The dataset includes 162 tree species. Here are the most common:
 
 | Rank | Species | Count | Percentage |
 |------|---------|-------|------------|
-| 1 | Picea mariana (Mill.) Britton, Sterns & Poggenb. | 678 | 12.3% |
-| 2 | Acer rubrum L. | 360 | 6.5% |
-| 3 | Pseudotsuga menziesii (Mirb.) Franco var. menziesii | 300 | 5.4% |
-| 4 | Populus tremuloides Michx. | 271 | 4.9% |
-| 5 | Quercus rubra L. | 243 | 4.4% |
-| 6 | Pinus palustris Mill. | 233 | 4.2% |
-| 7 | Tsuga canadensis (L.) Carrière | 200 | 3.6% |
-| 8 | Pinus contorta Douglas ex Loudon var. latifolia Engelm. ex S. Watson | 189 | 3.4% |
-| 9 | Abies lasiocarpa (Hook.) Nutt. var. lasiocarpa | 172 | 3.1% |
-| 10 | Betula neoalaskana Sarg. | 162 | 2.9% |
+| 1 | Acer rubrum L. | 5,324 | 12.5% |
+| 2 | Tsuga canadensis (L.) Carrière | 3,103 | 7.3% |
+| 3 | Pseudotsuga menziesii (Mirb.) Franco var. menziesii | 2,678 | 6.3% |
+| 4 | Pinus palustris Mill. | 1,974 | 4.6% |
+| 5 | Quercus rubra L. | 1,843 | 4.3% |
+| 6 | Pinus contorta Douglas ex Loudon var. latifolia Engelm. ex S. Watson | 1,822 | 4.3% |
+| 7 | Tsuga heterophylla (Raf.) Sarg. | 1,394 | 3.3% |
+| 8 | Populus tremuloides Michx. | 1,091 | 2.6% |
+| 9 | Liriodendron tulipifera L. | 1,049 | 2.5% |
+| 10 | Quercus alba L. | 1,004 | 2.4% |
 
 ## Geographic Distribution
 
-Data collected from **30 NEON sites** across North America:
+Data collected from **27 NEON sites** across North America:
 
-**1.** DEJU: 577 samples (10.5%)  
-**2.** BART: 533 samples (9.7%)  
-**3.** BONA: 504 samples (9.1%)  
-**4.** HARV: 490 samples (8.9%)  
-**5.** MLBS: 368 samples (6.7%)  
-**6.** RMNP: 329 samples (6.0%)  
-**7.** DELA: 299 samples (5.4%)  
-**8.** NIWO: 276 samples (5.0%)  
-**9.** UNDE: 262 samples (4.7%)  
-**10.** TALL: 246 samples (4.5%)  
+**1.** HARV: 6,672 samples (15.7%)  
+**2.** MLBS: 5,056 samples (11.9%)  
+**3.** GRSM: 4,774 samples (11.2%)  
+**4.** DELA: 4,240 samples (10.0%)  
+**5.** RMNP: 3,602 samples (8.5%)  
+**6.** WREF: 3,517 samples (8.3%)  
+**7.** OSBS: 2,101 samples (4.9%)  
+**8.** BART: 1,827 samples (4.3%)  
+**9.** UNDE: 1,678 samples (4.0%)  
+**10.** CLBJ: 1,655 samples (3.9%)  
 
 ## Installation
 
@@ -184,7 +184,7 @@ datamodule = NeonCrownDataModule(
 )
 
 # Train RGB model
-classifier = RGBClassifier(num_classes=96)
+classifier = RGBClassifier(num_classes=162)
 
 import lightning as L
 trainer = L.Trainer(max_epochs=50)
@@ -237,5 +237,5 @@ Ritesh Chowdhry
 ## Acknowledgments
 
 - National Ecological Observatory Network (NEON)
-- This dataset details were generated on 2025-08-24
+- This dataset details were generated on 2025-08-26
 
