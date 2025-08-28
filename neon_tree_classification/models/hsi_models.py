@@ -18,7 +18,7 @@ class SimpleHSINet(nn.Module):
     """
 
     def __init__(
-        self, num_bands: int = 426, num_classes: int = 10, input_size: int = 224
+        self, num_bands: int = 369, num_classes: int = 10, input_size: int = 224
     ):
         """
         Initialize SimpleHSINet.
@@ -124,7 +124,7 @@ class SpectralCNN(nn.Module):
     """
 
     def __init__(
-        self, num_bands: int = 426, num_classes: int = 10, input_size: int = 224
+        self, num_bands: int = 369, num_classes: int = 10, input_size: int = 144
     ):
         """
         Initialize SpectralCNN.
@@ -245,7 +245,7 @@ class HyperNet(nn.Module):
     """
 
     def __init__(
-        self, num_bands: int = 426, num_classes: int = 10, input_size: int = 224
+        self, num_bands: int = 369, num_classes: int = 10, input_size: int = 224
     ):
         """
         Initialize HyperNet.
@@ -374,7 +374,7 @@ class SpectralAttention(nn.Module):
 
 # Factory function for easy model creation
 def create_hsi_model(
-    model_type: str = "simple", num_bands: int = 426, num_classes: int = 10, **kwargs
+    model_type: str = "simple", num_bands: int = 369, num_classes: int = 10, **kwargs
 ) -> nn.Module:
     """
     Factory function to create HSI models.

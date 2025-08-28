@@ -45,6 +45,37 @@ Crops individual tree crowns from NEON multi-modal tiles (RGB, LiDAR, HSI) using
 ### `create_training_csv.py`
 Creates training-ready CSV files by combining cropped crown data with species labels from NEON Vegetation Structure and Traits (VST) data. Simple script that merges crop metadata with species labels for machine learning workflows.
 
+### `convert_tif_to_npy.py`
+Converts TIF crown crops to NPY format for faster loading during machine learning training. Includes validation and data cleaning steps.
+
+**Key Features:**
+- **6.5x faster loading** compared to TIF format
+- **Data validation**: Binary validation for small tree crowns (no thresholds)
+- **NoData cleaning**: Replaces -9999 values with 0 for cleaner downstream processing
+- **Modality-aware validation**:
+  - HSI & LiDAR: Allows crown masking (requires ≥10% valid pixels)
+  - RGB: Strict validation (no nodata pixels expected)
+- **Metadata updates**: Creates updated CSV with validity flags and NPY paths
+- **Incremental processing**: Can process individual modalities separately
+
+**Input Structure:**
+```
+cropped_crowns_modality_organized/
+├── rgb/crown_id.tif
+├── hsi/crown_id.tif
+├── lidar/crown_id.tif
+└── crop_metadata.csv
+```
+
+**Output Structure:**
+```
+cropped_crowns_npy/
+├── rgb/crown_id.npy
+├── hsi/crown_id.npy
+├── lidar/crown_id.npy
+└── crop_metadata_npy.csv
+```
+
 **Input Requirements:**
 - Curated NEON tiles directory with `rgb/`, `lidar/`, and `hsi_tif/` subdirectories
 - Crown polygon data in GeoPackage (.gpkg) or Shapefile format with individual tree locations
@@ -63,7 +94,7 @@ output_dir/
 ```
 output_dir/
 ├── rgb/SITE_YEAR_INDIVIDUAL_CROWNIDX.tif
-├── lidar/SITE_YEAR_INDIVIDUAL_CROWNIDX.tif  
+├── lidar/SITE_YEAR_INDIVIDUAL_CROWNIDX.tif
 ├── hsi/SITE_YEAR_INDIVIDUAL_CROWNIDX.tif
 └── crop_metadata.csv
 ```
@@ -98,6 +129,23 @@ python create_training_csv.py \
   --crop_metadata cropped_crowns/crop_metadata.csv \
   --vst_labels neon_vst_data.csv \
   --output training_data.csv
+```
+
+### Basic Usage - NPY Conversion
+```bash
+# Convert all modalities
+python convert_tif_to_npy.py \
+  /path/to/cropped_crowns_modality_organized \
+  /path/to/crop_metadata.csv
+
+# Auto-detect metadata CSV
+python convert_tif_to_npy.py \
+  /path/to/cropped_crowns_modality_organized
+
+# Custom output directory
+python convert_tif_to_npy.py \
+  /path/to/cropped_crowns_modality_organized \
+  --npy-dir cropped_crowns_npy_custom
 ```
 
 ### Crown Cropping Options
@@ -165,6 +213,25 @@ python crop_crowns_multimodal.py \
   --max_crowns 10
 ```
 
+#### NPY Conversion
+```bash
+# Standard conversion with auto-detection
+python convert_tif_to_npy.py \
+  /path/to/cropped_crowns_modality_organized
+
+# With explicit metadata CSV
+python convert_tif_to_npy.py \
+  /path/to/cropped_crowns_modality_organized \
+  /path/to/crop_metadata.csv
+
+# Custom output directory and CSV
+python convert_tif_to_npy.py \
+  /path/to/cropped_crowns_modality_organized \
+  /path/to/crop_metadata.csv \
+  --npy-dir cropped_crowns_optimized \
+  --output-csv /path/to/custom_metadata_npy.csv
+```
+
 ## Important Notes
 
 - **Complete sets only**: Only processes coordinates with all 3 modalities (RGB, HSI, LiDAR)
@@ -176,26 +243,28 @@ python crop_crowns_multimodal.py \
 ## Filename Patterns Recognized
 
 - **RGB**: `YYYY_SITE_#_EASTING_NORTHING_image.tif`
-- **HSI**: `NEON_D##_SITE_DP3_EASTING_NORTHING_reflectance.h5`  
+- **HSI**: `NEON_D##_SITE_DP3_EASTING_NORTHING_reflectance.h5`
 - **LiDAR**: `NEON_D##_SITE_DP3_EASTING_NORTHING_CHM.tif`
 
 ## Expected Workflow
 
 ### Complete Processing Pipeline
-1. **Download NEON data** using `../neon_downloader.py` 
+1. **Download NEON data** using `../neon_downloader.py`
 2. **Curate tiles** with `curate_tiles.py` to flatten and organize the data
 3. **Convert HSI format** with `hsi_convert_h5_to_tif.py` (if needed)
 4. **Crop individual crowns** with `crop_crowns_multimodal.py` using crown polygon data
 5. **Create training CSV** with `create_training_csv.py` to combine crops with species labels
-6. **Use for machine learning** model training and evaluation
+6. **Convert to NPY format** with `convert_tif_to_npy.py` for optimized training performance
+7. **Use for machine learning** model training and evaluation
 
 ### For Tile-Level Analysis
 1. Download NEON data using `../neon_downloader.py`
-2. Run `curate_tiles.py` to flatten and organize the data  
+2. Run `curate_tiles.py` to flatten and organize the data
 3. Use curated tiles directly for tile-level machine learning workflows
 
-### For Individual Tree Analysis  
+### For Individual Tree Analysis
 1. Complete steps 1-3 above
 4. Obtain crown polygon data (from field surveys, automated detection, etc.)
 5. Run `crop_crowns_multimodal.py` to extract individual tree crops
-6. Use individual crown crops for tree-level classification, detection, or analysis
+6. Run `convert_tif_to_npy.py` to convert crops to optimized NPY format
+7. Use NPY crown crops for tree-level classification, detection, or analysis

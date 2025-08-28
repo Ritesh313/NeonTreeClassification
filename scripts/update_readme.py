@@ -12,7 +12,7 @@ import argparse
 
 
 def get_dataset_stats(csv_path):
-    """Get dataset statistics directly from CSV without importing the package."""
+    """Get dataset statistics from the combined CSV file."""
     print(f"Loading dataset from {csv_path}...")
     df = pd.read_csv(csv_path)
 
@@ -21,10 +21,12 @@ def get_dataset_stats(csv_path):
         "species_count": df["species"].nunique(),
         "sites_count": df["site"].nunique(),
         "years": sorted(df["year"].unique()),
+        "modalities": ["RGB", "Hyperspectral (HSI)", "LiDAR"],
+        "hdf5_data": True,  # Flag indicating HDF5-based data
     }
 
-    # Species distribution
-    if "species_name" in df.columns:
+    # Species distribution (use species_name if available, otherwise species code)
+    if "species_name" in df.columns and df["species_name"].notna().any():
         species_name_counts = df["species_name"].value_counts()
         stats["top_species_names"] = species_name_counts.head(10).to_dict()
     else:
@@ -35,6 +37,19 @@ def get_dataset_stats(csv_path):
     site_counts = df["site"].value_counts()
     stats["site_distribution"] = site_counts.to_dict()
 
+    # Dataset configuration info
+    stats["dataset_configs"] = {
+        "combined": {
+            "samples": len(df),
+            "description": "Complete dataset with all available samples",
+        },
+        "large": {"samples": "~42,000", "description": "Main training set"},
+        "high_quality": {
+            "samples": "~5,500",
+            "description": "Curated subset with highest data quality",
+        },
+    }
+
     return stats
 
 
@@ -44,36 +59,138 @@ def update_readme(csv_path, readme_path):
 
     print("Generating README content...")
 
-    # Generate the new README content
-    readme_content = f"""# NEON Multi-Modal Tree Species Dataset
+    readme_content = f"""# NEON Multi-Modal Tree Species Classification Dataset
 
-Hyperspectral, RGB and LiDAR airborne data for **{stats['species_count']} tree species** representing **{stats['total_individuals']:,} individual trees** across **{stats['sites_count']} NEON sites** in North America.
+A comprehensive dataset of **{stats['species_count']} tree species** with **{stats['total_individuals']:,} individual tree crowns** from **{stats['sites_count']} NEON sites** across North America. Each sample includes RGB imagery, 369-band hyperspectral data, and LiDAR canopy height models.
 
-## Dataset Overview
+## 🚀 Quick Start
+
+### 1. Installation
+```bash
+# Clone the repository
+git clone https://github.com/Ritesh313/NeonTreeClassification.git
+cd NeonTreeClassification
+
+# Install with uv (recommended - faster dependency resolution)
+uv sync
+
+# Or install with pip
+pip install -e .
+```
+
+### 2. Quick Start with Ready-to-Run Example
+
+**🚀 Try the quickstart script first:**
+```bash
+# Option A: Using uv run (recommended)
+uv run python quickstart.py
+
+# Option B: After activating environment
+source .venv/bin/activate
+python quickstart.py
+```
+
+This script demonstrates dataloader usage and **automatically downloads the dataset (590 MB)** on first use.
+
+### 3. Using Dataloaders in Your Own Projects
+
+Copy the code from `quickstart.py` or use it directly in your projects:
+
+#### Option A: Using `uv run` (Recommended)
+```bash
+# Run your Python script (create in repo root directory)
+uv run python your_analysis_script.py
+
+# Or start Jupyter notebook
+uv run jupyter notebook
+```
+
+#### Option B: Activate the environment (familiar to conda users)
+```bash
+# Activate the environment (Linux/Mac)
+source .venv/bin/activate
+
+# Now use regular Python commands (create scripts in repo root)
+python your_analysis_script.py
+jupyter notebook
+
+# Deactivate when done
+deactivate
+```
+
+#### Example: Getting the Dataloaders
+```python
+from scripts.get_dataloaders import get_dataloaders
+
+# 📥 Dataset downloads automatically on first use (590 MB)
+train_loader, test_loader = get_dataloaders(
+    config='large',  # Choose: 'combined', 'large', or 'high_quality'
+    modalities=['rgb', 'hsi', 'lidar'],  # Choose modalities
+    batch_size=32
+)
+
+# Each batch contains:
+for batch in train_loader:
+    rgb_data = batch['rgb']        # torch.Tensor [batch_size, 3, 128, 128]
+    hsi_data = batch['hsi']        # torch.Tensor [batch_size, 369, 12, 12]
+    lidar_data = batch['lidar']    # torch.Tensor [batch_size, 1, 12, 12]
+    labels = batch['species_idx']  # torch.Tensor [batch_size] (class indices)
+    # Optional metadata (if include_metadata=True):
+    # batch['crown_id'], batch['species'], batch['site']
+```
+
+### 4. Running the Complete Training Pipeline (Optional)
+```bash
+# Use our complete training script
+uv run python examples/train.py
+```
+
+> **💡 Optional**: For manual control, you can pre-download the dataset using `python scripts/download_dataset.py`
+
+## 📊 Dataset Configurations
+
+The dataset comes with **3 pre-configured subsets** for different use cases:
+
+| Configuration | Samples | Species | Description |
+|---------------|---------|---------|-------------|
+| **`combined`** | {stats['total_individuals']:,} | {stats['species_count']} | Complete dataset with all available samples |
+| **`large`** | ~42,000 | ~162 | Main training set |
+| **`high_quality`** | ~5,500 | ~96 | Curated subset with highest data quality |
+
+### Key Dataset Features
+- **🎯 Flexible Filtering:** Filter by species, sites, years, or modalities
+- **🌍 Geographic Coverage:** 30 NEON sites across diverse North American ecosystems
+- **📅 Temporal Range:** 10 years of data (2014-2023) for temporal analysis
+- **🔬 Multi-modal:** RGB, 369-band hyperspectral, and LiDAR for each sample
+- **📊 Rich Metadata:** Tree height, diameter, canopy position, and plot information
+
+### 4 Training Scenarios
+```python
+# Scenario 1: Standard training on filtered dataset
+train_loader, test_loader = get_dataloaders(config='large', test_ratio=0.2)
+
+# Scenario 2: Maximum data training
+train_loader, test_loader = get_dataloaders(config='combined', test_ratio=0.15)
+
+# Scenario 3: High-quality only (smaller but cleaner)
+train_loader, test_loader = get_dataloaders(config='high_quality', test_ratio=0.2)
+
+# Scenario 4: Domain transfer (train on large, test on high-quality)
+train_loader, test_loader = get_dataloaders(
+    train_config='large',
+    test_config='high_quality'
+)
+```
+
+## 🌐 Dataset Overview
 
 - **{stats['total_individuals']:,}** individual tree crowns
-- **{stats['species_count']}** unique species  
+- **{stats['species_count']}** unique species
 - **{stats['sites_count']}** NEON sites across North America
 - **{stats['years'][0]}-{stats['years'][-1]}** ({len(stats['years'])} years of data)
-- **3 modalities:** RGB, Hyperspectral (426 bands), LiDAR CHM
-
-## Quick Start
-
-```python
-# Load and explore the dataset
-from neon_tree_classification.core.dataset import NeonCrownDataset
-
-# Simple loading
-dataset = NeonCrownDataset.load()
-dataset.summary()  # Print dataset overview
-
-# Filter for specific species or sites  
-conifers = dataset.filter(species=['PSMEM', 'TSHE'])
-west_coast = conifers.filter(sites=['ABBY', 'HARV'])
-
-# Get dataset statistics
-stats = dataset.get_dataset_stats()
-```
+- **3 modalities:** RGB (3 bands), Hyperspectral (369 bands), LiDAR CHM (1 band)
+- **Ecological metadata:** Height (95.4% available), stem diameter (99.4% available), canopy position (81.4% available)
+- **HDF5 storage:** Efficient compressed format for fast loading
 
 ## Visualization Examples
 
@@ -92,32 +209,26 @@ The package includes comprehensive visualization tools for all three modalities:
 from neon_tree_classification.core.visualization import (
     plot_rgb, plot_hsi, plot_hsi_pca, plot_hsi_spectra, plot_lidar
 )
-
-# RGB visualization
-plot_rgb('path/to/crown_rgb.tif')        # True color RGB image
-
-# Hyperspectral visualization options  
-plot_hsi('path/to/crown_hsi.tif')        # Pseudo RGB (bands ~660nm, ~550nm, ~450nm)
-plot_hsi_pca('path/to/crown_hsi.tif')    # PCA decomposition to 3 components
-plot_hsi_spectra('path/to/crown_hsi.tif') # Spectral signatures of pixels
-
-# LiDAR visualization
-plot_lidar('path/to/crown_chm.tif')      # Canopy height model with colorbar
-```
-
-### Quick Visualization with Dataset
-
-```python
-# Easy visualization with dataset integration
 from neon_tree_classification.core.dataset import NeonCrownDataset
 
+# Load dataset and get a sample
 dataset = NeonCrownDataset.load()
-sample = dataset.data.iloc[0]  # Get first sample
+sample_data = dataset[0]  # Get first sample (returns dict with rgb, hsi, lidar arrays)
 
-# Visualize all modalities for this tree crown
-plot_rgb(sample['rgb_path'])
-plot_hsi(sample['hsi_path'])  
-plot_lidar(sample['lidar_path'])
+# Visualize each modality using the numpy arrays directly
+plot_rgb(sample_data['rgb'])             # True color RGB image from array
+plot_hsi(sample_data['hsi'])             # Pseudo RGB (bands ~660nm, ~550nm, ~450nm)
+plot_hsi_pca(sample_data['hsi'])         # PCA decomposition to 3 components
+plot_hsi_spectra(sample_data['hsi'])     # Spectral signatures of pixels
+plot_lidar(sample_data['lidar'])         # Canopy height model with colorbar
+```
+
+### Interactive Visualization Notebook
+
+For comprehensive data exploration and visualization examples, see:
+```bash
+# Open the visualization notebook
+jupyter notebook notebooks/visualization.ipynb
 ```
 
 ## Top Species
@@ -157,122 +268,232 @@ Data collected from **{stats['sites_count']} NEON sites** across North America:
     readme_content += f"""
 ## Installation
 
-### Basic Installation
+### Prerequisites
+- Python 3.9+ (recommended: Python 3.11)
+- CUDA-capable GPU (optional, but recommended for training)
+
+### Recommended: Using uv (Fast Python Package Manager)
 ```bash
 # Clone the repository
 git clone https://github.com/Ritesh313/NeonTreeClassification.git
 cd NeonTreeClassification
 
-# Install core dependencies
-pip install .
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# or: pip install uv
+
+# Install with uv (automatically handles dependencies)
+uv sync
+
+# Install with specific dependency groups
+uv sync --extra dev          # Add development tools (testing, formatting)
+uv sync --extra processing   # Add geospatial processing tools (for advanced users)
+uv sync --extra logging      # Add experiment logging tools (Comet ML, WandB)
+uv sync --all-extras         # Install everything
 ```
 
-### Optional Dependencies
+### Alternative: Using pip
 ```bash
-# For development (tests, formatting, notebooks)
-pip install .[dev]
+# Install core dependencies
+pip install -e .
 
-# For data processing (geospatial tools)
-pip install .[processing]
-
-# For experiment logging
-pip install .[logging]
-
-# Install all optional dependencies
-pip install .[dev,processing,logging]
+# Install optional dependencies
+pip install -e .[dev,processing,logging]
 ```
+
+## Baseline Classification Results
+
+Preliminary single-modality baseline results for **167-species classification** using the `combined` dataset configuration (seed=42, no hyperparameter optimization):
+
+| Modality | Test Accuracy | Model | Notes |
+|----------|---------------|-------|-------|
+| **RGB** | 53.5% | ResNet | Standard computer vision approach |
+| **HSI** | 27.3% | Spectral CNN | 369-band hyperspectral data |
+| **LiDAR** | 11.5% | Structural CNN | Canopy height model |
+
+*167-species classification is inherently challenging. These are basic preliminary results with default parameters - significant improvements possible with hyperparameter tuning, data augmentation, and architectural improvements.*
+
+### Reproduce Results
+
+**Prerequisites:** First run dataloaders to download dataset:
+```python
+from scripts.get_dataloaders import get_dataloaders
+# This downloads the dataset to _neon_tree_classification_dataset_files/
+train_loader, test_loader = get_dataloaders(config='combined')
+```
+
+**With Comet ML (exact reproduction):**
+```bash
+# RGB baseline (requires Comet ML setup)
+uv run python examples/train.py \\
+    --csv_path _neon_tree_classification_dataset_files/metadata/combined_dataset.csv \\
+    --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 \\
+    --modality rgb --model_type resnet --batch_size 1024 --seed 42 \\
+    --logger comet --early_stop_patience 15
+
+# HSI baseline (requires Comet ML setup)  
+uv run python examples/train.py \\
+    --csv_path _neon_tree_classification_dataset_files/metadata/combined_dataset.csv \\
+    --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 \\
+    --modality hsi --model_type spectral_cnn --batch_size 128 --seed 42 \\
+    --logger comet --early_stop_patience 15
+
+# LiDAR baseline (requires Comet ML setup)
+uv run python examples/train.py \\
+    --csv_path _neon_tree_classification_dataset_files/metadata/combined_dataset.csv \\
+    --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 \\
+    --modality lidar --model_type structural --batch_size 1024 --seed 42 \\
+    --logger comet --early_stop_patience 15
+```
+
+**Without Comet ML (approximate reproduction):**
+```bash
+# RGB baseline (fixed epochs)
+uv run python examples/train.py \\
+    --csv_path _neon_tree_classification_dataset_files/metadata/combined_dataset.csv \\
+    --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 \\
+    --modality rgb --model_type resnet --batch_size 1024 --seed 42 --epochs 100
+
+# HSI baseline (fixed epochs)
+uv run python examples/train.py \\
+    --csv_path _neon_tree_classification_dataset_files/metadata/combined_dataset.csv \\
+    --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 \\
+    --modality hsi --model_type spectral_cnn --batch_size 128 --seed 42 --epochs 100
+
+# LiDAR baseline (fixed epochs)
+uv run python examples/train.py \\
+    --csv_path _neon_tree_classification_dataset_files/metadata/combined_dataset.csv \\
+    --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 \\
+    --modality lidar --model_type structural --batch_size 1024 --seed 42 --epochs 100
+```
+*Note: Without early stopping, results may vary. Original experiments used Comet ML logging with early stopping (patience=15).*
 
 ## Repository Structure
 
 ```
 NeonTreeClassification/
-├── neon_tree_classification/          # Main package
-│   ├── core/                         # Core functionality (dataset, visualization)
-│   │   ├── dataset.py               # Enhanced dataset with filtering & stats
-│   │   ├── datamodule.py            # PyTorch Lightning data module  
-│   │   └── visualization.py         # All visualization functions
-│   └── models/                      # ML architectures & Lightning modules
-├── examples/                         # Training and comparison examples
-│   ├── train.py                     # Main training script
-│   └── compare_modalities.py        # Multi-modal comparison
-├── notebooks/                        # Interactive exploration
-│   └── visualization.ipynb          # Visualization demo notebook
-├── processing/                       # Advanced data processing tools
-├── scripts/                          # Automation utilities
-├── sample_plots/                     # Generated sample images
-└── training_data_clean.csv          # Main dataset file
+├── 📁 neon_tree_classification/      # Main Python package
+│   ├── core/                        # Core functionality
+│   │   ├── dataset.py              # HDF5-based dataset class
+│   │   ├── datamodule.py           # PyTorch Lightning data module
+│   │   └── visualization.py        # Multi-modal visualization tools
+│   └── models/                      # ML architectures & training modules
+├── 📁 scripts/                       # Easy-to-use scripts
+│   ├── download_dataset.py         # Download & extract dataset
+│   ├── get_dataloaders.py          # Simple DataLoader factory
+├── 📁 examples/                      # Training examples
+│   └── train.py                    # Flexible training script
+├── 📁 notebooks/                     # Interactive exploration
+│   └── visualization.ipynb         # Dataset exploration & visualization
+├── 📁 processing/                    # NEON raw data processing tools
+│   └── neon_data_processing/       # Scripts for processing raw NEON data products
+├── 📁 sample_plots/                  # Generated example visualizations
+├── pyproject.toml                   # Package configuration & dependencies
+└── uv.lock                         # Dependency lock file
 ```
 
-## Interactive Notebook
+*Note: Dataset automatically downloads to `_neon_tree_classification_dataset_files/` on first use.*
 
-Explore the dataset and visualization functions interactively:
+## Training Models
+
+Use the flexible training script with different modalities:
 
 ```bash
-# Start Jupyter and open the visualization notebook
-jupyter notebook notebooks/visualization.ipynb
+# Train RGB classifier
+python examples/train.py --modality rgb --csv_path _neon_tree_classification_dataset_files/metadata/large_dataset.csv --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5
+
+# Train hyperspectral classifier
+python examples/train.py --modality hsi --csv_path _neon_tree_classification_dataset_files/metadata/combined_dataset.csv --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 --batch_size 16
+
+# Train LiDAR classifier
+python examples/train.py --modality lidar --csv_path _neon_tree_classification_dataset_files/metadata/high_quality_dataset.csv --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5
+
+# Advanced: External test set (train on large, test on high_quality)
+python examples/train.py --modality rgb --csv_path _neon_tree_classification_dataset_files/metadata/large_dataset.csv --hdf5_path _neon_tree_classification_dataset_files/neon_dataset.h5 --external_test_csv _neon_tree_classification_dataset_files/metadata/high_quality_dataset.csv
 ```
 
-The notebook includes examples of:
-- Loading and filtering the dataset
-- RGB, HSI, and LiDAR visualizations  
-- Interactive exploration of tree crown data
+### Add Custom Models
+Create new model architectures in `neon_tree_classification/models/` and reference them with the `--model_type` flag.
 
 ## Advanced Usage
 
-### Multi-modal Training
+### Custom Data Filtering & Lightning DataModule
 
 ```python
-# Train models on different modalities
+# For advanced users: Use Lightning DataModule with flexible splitting
 from neon_tree_classification.core.datamodule import NeonCrownDataModule
-from neon_tree_classification.models.lightning_modules import RGBClassifier
 
-# Setup data
+# Basic configuration with species/site filtering
 datamodule = NeonCrownDataModule(
-    csv_path="training_data_clean.csv",
-    modalities=["rgb", "hsi", "lidar"],
-    batch_size=32
+    csv_path="_neon_tree_classification_dataset_files/metadata/combined_dataset.csv",
+    hdf5_path="_neon_tree_classification_dataset_files/neon_dataset.h5",
+    modalities=["rgb"],  # Single modality training
+    batch_size=32,
+    # Filtering options
+    species_filter=["PSMEM", "TSHE"],  # Train on specific species
+    site_filter=["HARV", "OSBS"],      # Train on specific sites
+    year_filter=[2018, 2019],          # Train on specific years
+    # Split method options
+    split_method="site",  # Options: "random", "site", "year"
+    val_ratio=0.15,
+    test_ratio=0.15
 )
 
-# Train RGB model
-classifier = RGBClassifier(num_classes={stats['species_count']})
+# For external test sets (advanced)
+datamodule = NeonCrownDataModule(
+    csv_path="_neon_tree_classification_dataset_files/metadata/combined_dataset.csv",
+    hdf5_path="_neon_tree_classification_dataset_files/neon_dataset.h5",
+    external_test_csv_path="path/to/external_test.csv",  # Optional external test
+    external_test_hdf5_path="path/to/external_test.h5",  # Optional external HDF5
+    modalities=["rgb"]
+)
 
-import lightning as L
-trainer = L.Trainer(max_epochs=50)
-trainer.fit(classifier, datamodule)
+datamodule.setup("fit")  # Auto-filters species for compatibility
 ```
 
-### Data Processing
+### Data Processing Pipeline
 
-The package includes tools for processing NEON data, but most users will work with the pre-processed dataset.
+The `processing/` folder contains a comprehensive NEON data processing pipeline:
 
-```python
-# For advanced users: process raw NEON data
-from processing.shapefile_processor import ShapefileProcessor
-processor = ShapefileProcessor()
-sites_df, summary = processor.process_shapefiles(destination_dir)
-```
+**Core Processing Steps:**
+1. **Download NEON tiles** (`neon_downloader.py`) - Downloads RGB, HSI, LiDAR data from NEON API
+2. **Curate tiles** (`curate_tiles.py`) - Quality control and tile selection
+3. **Process shapefiles** (`shapefile_processing/`) - Extract crown metadata and validate annotations
+4. **Crop crowns** (`crop_crowns_multimodal.py`) - Extract individual tree crowns from tiles
+5. **Convert formats** (`convert_tif_to_npy.py`, `hsi_convert_h5_to_tif.py`) - Optimize data storage
+6. **Generate datasets** (`create_training_csv.py`) - Create final training/test CSVs
+7. **Filter & combine** (`misc/filter_rare_species.py`, `dataset_combiner.py`) - Dataset refinement
 
 ## Dataset Details
 
 ### NEON Data Products
 - **RGB**: `DP3.30010.001` - High-resolution orthorectified imagery
-- **Hyperspectral**: `DP3.30006.002` - 426-band spectrometer reflectance  
+- **Hyperspectral**: `DP3.30006.002` - 426-band spectrometer reflectance
 - **LiDAR**: `DP3.30015.001` - Canopy Height Model
 
 ### Data Structure
 ```
-training_data_clean.csv - Main dataset file
+_neon_tree_classification_dataset_files/metadata/combined_dataset.csv - Main dataset file
 ├── crown_id          - Unique identifier for each tree crown
+├── individual        - NEON individual tree ID
+├── individual_id     - Full individual identifier
 ├── site              - NEON site code
-├── year              - Data collection year  
+├── year              - Data collection year
 ├── species           - Species code
 ├── species_name      - Full species name
-├── height            - Tree height (meters)
-├── rgb_path          - Path to RGB image
-├── hsi_path          - Path to hyperspectral image
-├── lidar_path        - Path to LiDAR CHM
-└── [other metadata]  - Additional tree measurements
+├── label_site        - Site where tree was labeled
+├── height            - Tree height in meters (95.4% available)
+├── stemDiameter      - Stem diameter in cm (99.4% available)
+├── canopyPosition    - Light exposure: Full sun, Partially shaded, etc. (81.4% available)
+├── plantStatus       - Tree health status: Live, Dead, etc. (99.99% available)
+├── plot              - Plot identifier (currently "unknown" for all samples)
+├── hand_annotated    - Whether crown was manually annotated (boolean)
+├── rgb_path          - Path to RGB image in HDF5 dataset
+├── hsi_path          - Path to hyperspectral image in HDF5 dataset
+└── lidar_path        - Path to LiDAR CHM in HDF5 dataset
 ```
+
+**Ecological Metadata**: Most samples include tree measurements that provide valuable ecological context for classification, though availability varies by field.
 
 ## Contributing
 
@@ -280,14 +501,10 @@ training_data_clean.csv - Main dataset file
 2. Create a feature branch
 3. Submit a pull request
 
-## Authors
-
-Ritesh Chowdhry
-
 ## Acknowledgments
 
 - National Ecological Observatory Network (NEON)
-- This dataset details were generated on {datetime.datetime.now().strftime("%Y-%m-%d")}
+- Dataset statistics generated on {datetime.datetime.now().strftime("%Y-%m-%d")}
 
 """
 

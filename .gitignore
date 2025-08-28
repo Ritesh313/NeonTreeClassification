@@ -30,6 +30,9 @@ dist/
 .venv/
 uv.lock
 
+# Downloaded dataset files
+_neon_tree_classification_dataset_files/
+
 # IDE/Editor
 .vscode/
 

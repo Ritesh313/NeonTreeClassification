@@ -4,6 +4,9 @@ PyTorch Lightning modules for training tree classification models.
 Provides base class with common training logic and modality-specific extensions.
 """
 
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 import lightning as L
@@ -11,6 +14,12 @@ from torch.optim import Adam, SGD, AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR, StepLR
 from typing import Dict, Any, Optional, Union
 import torchmetrics
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    ConfusionMatrixDisplay,
+)
+from pytorch_lightning.loggers import CometLogger
 
 from .rgb_models import create_rgb_model
 from .hsi_models import create_hsi_model
@@ -78,6 +87,10 @@ class BaseTreeClassifier(L.LightningModule):
             task="multiclass", num_classes=num_classes
         )
 
+        # Storage for test predictions and labels (for confusion matrix)
+        self.test_predictions = []
+        self.test_labels = []
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
         return self.model(x)
@@ -117,9 +130,9 @@ class BaseTreeClassifier(L.LightningModule):
         self.train_f1(preds, targets)
 
         # Log metrics
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/accuracy", self.train_acc, on_epoch=True, prog_bar=True)
-        self.log("train/f1", self.train_f1, on_epoch=True)
+        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train_accuracy", self.train_acc, on_epoch=True, prog_bar=True)
+        self.log("train_f1", self.train_f1, on_epoch=True)
 
         return loss
 
@@ -135,9 +148,9 @@ class BaseTreeClassifier(L.LightningModule):
         self.val_confmat(preds, targets)
 
         # Log metrics
-        self.log("val/loss", loss, on_epoch=True, prog_bar=True)
-        self.log("val/accuracy", self.val_acc, on_epoch=True, prog_bar=True)
-        self.log("val/f1", self.val_f1, on_epoch=True)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
+        self.log("val_accuracy", self.val_acc, on_epoch=True, prog_bar=True)
+        self.log("val_f1", self.val_f1, on_epoch=True)
 
         return loss
 
@@ -145,16 +158,165 @@ class BaseTreeClassifier(L.LightningModule):
         """Test step."""
         loss, preds, targets, logits = self._shared_step(batch, "test")
 
+        # Store predictions and targets for confusion matrix
+        self.test_predictions.append(preds.detach().cpu())
+        self.test_labels.append(targets.detach().cpu())
+
         # Update metrics
         self.test_acc(preds, targets)
         self.test_f1(preds, targets)
 
         # Log metrics
-        self.log("test/loss", loss, on_epoch=True)
-        self.log("test/accuracy", self.test_acc, on_epoch=True)
-        self.log("test/f1", self.test_f1, on_epoch=True)
+        self.log("test_loss", loss, on_epoch=True)
+        self.log("test_accuracy", self.test_acc, on_epoch=True)
+        self.log("test_f1", self.test_f1, on_epoch=True)
 
         return loss
+
+    def _get_species_names_and_labels(self):
+        """Extract species names and create display labels for confusion matrix."""
+        try:
+            # Get the idx_to_label mapping from the dataset
+            idx_to_label = self.trainer.datamodule.full_dataset.idx_to_label
+            num_classes = self.trainer.datamodule.full_dataset.num_classes
+
+            # Create ordered list of species names (idx 0, 1, 2, ...)
+            species_names = [idx_to_label[i] for i in range(num_classes)]
+
+            # Create display labels: "Species_Name (0)", "Species_Name (1)", etc.
+            display_labels = [
+                f"{species} ({i})" for i, species in enumerate(species_names)
+            ]
+
+            # Get the actual unique labels present in the test data for classification report
+            predictions = torch.cat(self.test_predictions).cpu().numpy()
+            true_labels = torch.cat(self.test_labels).cpu().numpy()
+            label_ints_for_report = sorted(list(set(true_labels)))
+
+            return species_names, display_labels, label_ints_for_report
+
+        except (AttributeError, KeyError) as e:
+            print(f"Could not extract species names: {e}")
+            # Fallback to generic labels
+            num_classes = self.hparams.num_classes
+            species_names = [f"Species_{i}" for i in range(num_classes)]
+            display_labels = [f"Species_{i} ({i})" for i in range(num_classes)]
+
+            predictions = torch.cat(self.test_predictions).cpu().numpy()
+            true_labels = torch.cat(self.test_labels).cpu().numpy()
+            label_ints_for_report = sorted(list(set(true_labels)))
+
+            return species_names, display_labels, label_ints_for_report
+
+    def on_test_epoch_end(self):
+        """Generate and log confusion matrix and classification report after test epoch."""
+
+        # Log standard metrics
+        self.log_dict(
+            {
+                "test_acc_final": self.test_acc.compute(),
+                "test_f1_final": self.test_f1.compute(),
+            },
+            on_step=False,
+            on_epoch=True,
+            logger=True,
+        )
+
+        if not self.test_predictions or not self.test_labels:
+            print(
+                "No test predictions or labels recorded, skipping confusion matrix and report."
+            )
+            return
+
+        # Get results directory
+        results_dir = self.trainer.default_root_dir
+
+        # Convert predictions and labels to numpy
+        predictions = torch.cat(self.test_predictions).cpu().numpy()
+        true_labels = torch.cat(self.test_labels).cpu().numpy()
+
+        # Get species names and labels
+        species_names, display_labels, label_ints_for_report = (
+            self._get_species_names_and_labels()
+        )
+
+        print(f"\nGenerating Test Results Summary in: {results_dir}")
+
+        # Generate and save confusion matrix
+        try:
+            cm_display = ConfusionMatrixDisplay.from_predictions(
+                true_labels,
+                predictions,
+                labels=label_ints_for_report,
+                display_labels=[display_labels[i] for i in label_ints_for_report],
+                xticks_rotation="vertical",
+                cmap="Blues",
+            )
+            cm_fig_path = os.path.join(results_dir, "test_confusion_matrix.png")
+            cm_display.figure_.savefig(cm_fig_path, dpi=150, bbox_inches="tight")
+            print(f"Confusion Matrix figure saved to: {cm_fig_path}")
+
+            # Get raw confusion matrix for logging
+            conf_matrix = confusion_matrix(
+                true_labels, predictions, labels=label_ints_for_report
+            )
+            print("\nConfusion Matrix:\n", conf_matrix)
+
+            # Log confusion matrix to CometML
+            try:
+                self.logger.experiment.log_confusion_matrix(
+                    matrix=conf_matrix,
+                    labels=[display_labels[i] for i in label_ints_for_report],
+                )
+                print("Confusion Matrix logged to CometML.")
+            except Exception as e:
+                print(f"Could not log confusion matrix to CometML: {e}")
+
+            # Close figure to free memory
+            plt.close(cm_display.figure_)
+
+        except Exception as e:
+            print(f"Could not generate confusion matrix: {e}")
+            print(
+                "Confusion Matrix (sklearn):\n",
+                confusion_matrix(
+                    true_labels, predictions, labels=label_ints_for_report
+                ),
+            )
+
+        # Generate and save classification report
+        try:
+            report = classification_report(
+                true_labels,
+                predictions,
+                labels=label_ints_for_report,
+                target_names=[display_labels[i] for i in label_ints_for_report],
+                zero_division=0,
+                output_dict=True,
+            )
+            report_df = pd.DataFrame(report).transpose().round(4)
+            report_csv_path = os.path.join(
+                results_dir, "test_classification_report.csv"
+            )
+            report_df.to_csv(report_csv_path)
+            print(f"Classification Report saved to: {report_csv_path}")
+            print("\nClassification Report:\n", report_df)
+
+            # Log classification report to CometML
+            try:
+                self.logger.experiment.log_table(
+                    filename="test_classification_report.csv", dataframe=report_df
+                )
+                print("Classification Report logged to CometML.")
+            except Exception as e:
+                print(f"Could not log classification report to CometML: {e}")
+
+        except Exception as e:
+            print(f"Could not generate classification report: {e}")
+
+        # Clear predictions and labels for next test run
+        self.test_predictions.clear()
+        self.test_labels.clear()
 
     def configure_optimizers(self):
         """Configure optimizers and schedulers."""
@@ -188,7 +350,7 @@ class BaseTreeClassifier(L.LightningModule):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "monitor": "val/loss",
+                    "monitor": "val_loss",
                     "frequency": 1,
                 },
             }

@@ -686,13 +686,13 @@ def main():
 Examples:
     # Basic usage (flat structure with site_year_individual_modality.tif naming)
     python crop_crowns_multimodal.py --tiles_dir /path/to/curated_tiles --crowns_gpkg /path/to/crowns.gpkg --output_dir /path/to/output
-    
+
     # With modality subdirectories (rgb/, lidar/, hsi/)
     python crop_crowns_multimodal.py --tiles_dir /path/to/curated_tiles --crowns_gpkg /path/to/crowns.gpkg --output_dir /path/to/output --modality_subdir
-    
+
     # With custom buffer
     python crop_crowns_multimodal.py --tiles_dir /path/to/curated_tiles --crowns_gpkg /path/to/crowns.gpkg --output_dir /path/to/output --buffer 3.0
-    
+
     # Filter by site with flat structure
     python crop_crowns_multimodal.py --tiles_dir /path/to/curated_tiles --crowns_gpkg /path/to/crowns.gpkg --output_dir /path/to/output --site HARV
         """,

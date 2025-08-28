@@ -255,12 +255,12 @@ class NEONDownloader:
             tryCatch({
                 cat("Downloading with parameters:\n")
                 cat("Product:", product_code, "\n")
-                cat("Site:", site_code, "\n") 
+                cat("Site:", site_code, "\n")
                 cat("Year:", year_val, "\n")
                 cat("Coordinates:", length(eastings), "tile pairs\n")
                 cat("Output:", output_path, "\n")
                 cat("Check size:", check_size, "\n")
-                
+
                 byTileAOP(dpID = product_code,
                          site = site_code,
                          year = year_val,
@@ -269,7 +269,7 @@ class NEONDownloader:
                          savepath = output_path,
                          include.provisional = TRUE,
                          check.size = check_size)
-                
+
                 cat("Download completed successfully\n")
                 return(TRUE)
             }, error = function(e) {
